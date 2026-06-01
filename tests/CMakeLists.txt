@@ -28,6 +28,7 @@ add_executable(xllm_tests
   server/openai_test.cpp
   server/sse_test.cpp
   server/hardening_test.cpp
+  model/quantized_test.cpp
 )
 target_include_directories(xllm_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(xllm_tests PRIVATE xllm_core doctest::doctest)
@@ -35,6 +36,12 @@ target_link_libraries(xllm_tests PRIVATE xllm_core doctest::doctest)
 # Resolve the local HF snapshot dir for integration tests (empty -> tests skip).
 file(GLOB _xllm_model_snapshots
   "$ENV{HOME}/.cache/huggingface/hub/models--mlx-community--Llama-3.2-1B-Instruct-bf16/snapshots/*")
+file(GLOB _xllm_model_snapshots_4bit
+  "$ENV{HOME}/.cache/huggingface/hub/models--mlx-community--Llama-3.2-1B-Instruct-4bit/snapshots/*")
+set(XLLM_MODEL_DIR_4BIT "")
+if(_xllm_model_snapshots_4bit)
+  list(GET _xllm_model_snapshots_4bit 0 XLLM_MODEL_DIR_4BIT)
+endif()
 set(XLLM_MODEL_DIR "")
 if(_xllm_model_snapshots)
   list(GET _xllm_model_snapshots 0 XLLM_MODEL_DIR)
@@ -43,6 +50,7 @@ endif()
 target_compile_definitions(xllm_tests PRIVATE
   XLLM_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
   XLLM_REF_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/reference/fixtures"
-  XLLM_MODEL_DIR="${XLLM_MODEL_DIR}")
+  XLLM_MODEL_DIR="${XLLM_MODEL_DIR}"
+  XLLM_MODEL_DIR_4BIT="${XLLM_MODEL_DIR_4BIT}")
 
 doctest_discover_tests(xllm_tests)

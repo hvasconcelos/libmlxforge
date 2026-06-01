@@ -93,7 +93,10 @@ void absorb(std::unordered_map<std::string, mx::array>& out,
   for (const auto& [raw, arr] : shard) {
     auto canon = sanitize_key(raw);
     if (!canon) continue;  // dropped buffer
-    out.emplace(*canon, mx::astype(arr, mx::float16));
+    // Cast only floating tensors to fp16; packed 4-bit weights (uint32) and
+    // other integer tensors are kept as-is.
+    mx::array value = mx::issubdtype(arr.dtype(), mx::floating) ? mx::astype(arr, mx::float16) : arr;
+    out.emplace(*canon, value);
   }
 }
 }  // namespace

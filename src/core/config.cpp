@@ -66,6 +66,12 @@ ModelConfig ModelConfig::from_json(const nlohmann::json& j) {
   c.bos_token_id = j.value("bos_token_id", -1);
   c.eos_token_ids = parse_eos_ids(j);
   c.rope_scaling = parse_rope_scaling(j);
+
+  if (auto it = j.find("quantization"); it != j.end() && it->is_object()) {
+    c.quantized = true;
+    c.quant_group_size = it->value("group_size", c.quant_group_size);
+    c.quant_bits = it->value("bits", c.quant_bits);
+  }
   return c;
 }
 

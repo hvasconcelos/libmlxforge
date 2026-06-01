@@ -35,6 +35,10 @@ struct ModelConfig {
   float rms_eps = 0.0f;       // rms_norm_eps
   int max_position_embeddings = 0;
   bool tie_word_embeddings = true;
+  // 4-bit quantization (config.json "quantization"), absent for fp16 models.
+  bool quantized = false;
+  int quant_group_size = 64;
+  int quant_bits = 4;
   std::optional<RopeScaling> rope_scaling;
   std::vector<int> eos_token_ids;
   int bos_token_id = -1;

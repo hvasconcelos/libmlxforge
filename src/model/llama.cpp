@@ -3,6 +3,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <utility>
 
 #include "mlx/fast.h"
@@ -89,10 +90,25 @@ const mx::array& LlamaModel::layer_w(int i, const std::string& suffix) const {
 }
 
 mx::array LlamaModel::linear(const mx::array& x, const std::string& weight_key) const {
+  if (cfg_.quantized) {
+    // weight_key ends with ".weight"; scales/biases share the same base.
+    static constexpr std::string_view kWeightSuffix = ".weight";
+    const std::string base = weight_key.substr(0, weight_key.size() - kWeightSuffix.size());
+    return mx::quantized_matmul(x, w_.at(weight_key), w_.at(base + ".scales"),
+                                w_.at(base + ".biases"), /*transpose=*/true, cfg_.quant_group_size,
+                                cfg_.quant_bits);
+  }
   return mx::matmul(x, mx::transpose(w_.at(weight_key)));  // weight is (out, in)
 }
 
 mx::array LlamaModel::embed(const mx::array& tokens) const {
+  if (cfg_.quantized) {
+    // Gather the quantized rows for these tokens, then dequantize just those.
+    mx::array w = mx::take(w_.at("model.embed_tokens.weight"), tokens, /*axis=*/0);
+    mx::array s = mx::take(w_.at("model.embed_tokens.scales"), tokens, /*axis=*/0);
+    mx::array b = mx::take(w_.at("model.embed_tokens.biases"), tokens, /*axis=*/0);
+    return mx::dequantize(w, s, b, cfg_.quant_group_size, cfg_.quant_bits);
+  }
   return mx::take(w_.at("model.embed_tokens.weight"), tokens, /*axis=*/0);
 }
 
