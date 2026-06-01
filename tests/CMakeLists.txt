@@ -16,6 +16,7 @@ add_executable(xllm_tests
   cache/batch_kv_cache_test.cpp
   cache/batch_kv_filter_merge_test.cpp
   cache/kv_budget_test.cpp
+  sample/sampler_test.cpp
 )
 target_include_directories(xllm_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(xllm_tests PRIVATE xllm_core doctest::doctest)
