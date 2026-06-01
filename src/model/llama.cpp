@@ -149,4 +149,16 @@ mx::array LlamaModel::decoder_block(const mx::array& x, int layer) const {
   return mx::add(h, mlp(post, layer));
 }
 
+mx::array LlamaModel::forward(const mx::array& tokens) const {
+  mx::array h = embed(tokens);
+  for (int layer = 0; layer < cfg_.n_layers; ++layer) {
+    h = decoder_block(h, layer);
+  }
+  h = rms_norm(h, w_.at("model.norm.weight"));
+  // LM head: a separate lm_head when present, else the tied input embedding.
+  const std::string head_key =
+      w_.has("lm_head.weight") ? "lm_head.weight" : "model.embed_tokens.weight";
+  return linear(h, head_key);  // (B, L, vocab)
+}
+
 }  // namespace xllm

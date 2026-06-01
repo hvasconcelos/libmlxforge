@@ -56,6 +56,11 @@ class LlamaModel {
   // One full decoder layer (prefill, causal): attention + MLP with residuals.
   mx::array decoder_block(const mx::array& x, int layer) const;
 
+  // Full forward pass (prefill, causal): embedding -> n_layers decoder layers ->
+  // final RMSNorm -> LM head (separate lm_head if present, else tied embedding).
+  // tokens (B, L) -> logits (B, L, vocab).
+  mx::array forward(const mx::array& tokens) const;
+
  private:
   // y = x @ W^T for an HF Linear weight W (out, in) stored under `weight_key`.
   mx::array linear(const mx::array& x, const std::string& weight_key) const;
