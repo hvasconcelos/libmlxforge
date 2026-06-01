@@ -39,6 +39,9 @@ class Worker {
   // total tokens generated under load proves one eval covers the whole batch.
   long decode_steps() const { return decode_steps_.load(); }
 
+  // True once the model has finished loading on the worker thread (else 503).
+  bool ready() const { return ready_.load(); }
+
  private:
   void run();  // the loop; the sole caller of MLX eval/async_eval
 
@@ -65,6 +68,7 @@ class Worker {
   std::vector<char> finished_;  // row marked for eviction
 
   std::atomic<long> decode_steps_{0};
+  std::atomic<bool> ready_{false};
   std::thread thread_;
 };
 

@@ -2,12 +2,17 @@
 
 namespace xllm {
 
-void Scheduler::submit(const std::shared_ptr<Request>& req) {
+bool Scheduler::submit(const std::shared_ptr<Request>& req) {
   {
     std::lock_guard<std::mutex> lk(m_);
+    if (max_waiting_ > 0 && static_cast<int>(waiting_.size()) >= max_waiting_) {
+      return false;  // queue full -> 429
+    }
+    req->enqueue_time = Request::Clock::now();
     waiting_.push_back(req);
   }
   cv_.notify_one();
+  return true;
 }
 
 std::shared_ptr<Request> Scheduler::next_waiting() {

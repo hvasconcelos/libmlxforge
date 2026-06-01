@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <mutex>
@@ -72,6 +73,11 @@ struct Request {
 
   TokenQueue tokens;                 // worker pushes generated ids, then close()s
   std::string finish_reason;         // "stop" | "length" | "cancel" (worker sets)
+
+  // Metrics (XLLM-024): enqueue stamped on submit, first_token/finish by worker.
+  using Clock = std::chrono::steady_clock;
+  Clock::time_point enqueue_time{};
+  Clock::time_point first_token_time{};
 };
 
 }  // namespace xllm

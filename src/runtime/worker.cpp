@@ -1,6 +1,8 @@
 #include "runtime/worker.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 
 #include "runtime/batching.h"
 #include "sample/sampler.h"
@@ -27,6 +29,7 @@ bool consume(Request& req, int& produced, int id) {
     req.finish_reason = "stop";
     return true;
   }
+  if (produced == 0) req.first_token_time = Request::Clock::now();  // TTFT marker
   req.tokens.push(id);
   if (++produced >= req.max_tokens) {
     req.finish_reason = "length";
@@ -49,6 +52,7 @@ void Worker::stop() {
 
 void Worker::run() {
   model_ = factory_();  // load the model on this thread so its arrays live here
+  ready_.store(true);
 
   while (true) {
     std::vector<std::shared_ptr<Request>> incoming;
@@ -143,9 +147,23 @@ void Worker::decode_step() {
 }
 
 void Worker::evict_finished() {
+  using ms = std::chrono::duration<double, std::milli>;
+  using sec = std::chrono::duration<double>;
+  const auto now = Request::Clock::now();
+
   std::vector<int> keep;
   for (int b = 0; b < static_cast<int>(finished_.size()); ++b) {
     if (finished_[b]) {
+      const Request& r = *reqs_[b];
+      const double ttft = ms(r.first_token_time - r.enqueue_time).count();
+      const double gen_s = sec(now - r.first_token_time).count();
+      const double tps = gen_s > 0 ? produced_[b] / gen_s : 0.0;
+      // Per-request metrics: TTFT, tokens/s, batch occupancy, queue depth.
+      std::fprintf(stderr,
+                   "[xllm] done reason=%s prompt=%zu gen=%d ttft=%.1fms tok/s=%.1f "
+                   "batch=%d queue=%zu\n",
+                   r.finish_reason.c_str(), r.prompt_ids.size(), produced_[b], ttft, tps,
+                   static_cast<int>(reqs_.size()), sched_->waiting_size());
       reqs_[b]->tokens.close();  // signal the consumer
     } else {
       keep.push_back(b);

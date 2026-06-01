@@ -27,6 +27,7 @@ add_executable(xllm_tests
   tokenizer/tokenizer_test.cpp
   server/openai_test.cpp
   server/sse_test.cpp
+  server/hardening_test.cpp
 )
 target_include_directories(xllm_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(xllm_tests PRIVATE xllm_core doctest::doctest)

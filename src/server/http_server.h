@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -21,8 +22,10 @@ namespace xllm {
 
 class HttpServer {
  public:
+  // `ready` reports whether the model has finished loading (else 503); `max_ctx`
+  // bounds the prompt length (else 400).
   HttpServer(Scheduler* scheduler, const Tokenizer* tokenizer, ModelConfig config,
-             std::string model_name);
+             std::string model_name, std::function<bool()> ready, int max_ctx);
 
   void listen(const std::string& host, int port);
   void stop();
@@ -31,12 +34,12 @@ class HttpServer {
   // prompt). Exposed for tests.
   std::shared_ptr<Request> make_request(const ChatRequest& cr) const;
 
-  // Run a request to completion (non-streaming) and assemble the response JSON.
-  nlohmann::json run_blocking(const ChatRequest& cr);
+  // Drain an already-submitted request and assemble the response JSON.
+  nlohmann::json run_blocking(const std::shared_ptr<Request>& req, const ChatRequest& cr);
 
-  // Stream a request as SSE chat.completion.chunk frames. Client disconnect
-  // (sink write fails) sets the Request's cancelled flag so the worker evicts.
-  void stream_chat(const ChatRequest& cr, httplib::Response& res);
+  // Stream an already-submitted request as SSE chat.completion.chunk frames.
+  // Client disconnect (sink write fails) sets cancelled so the worker evicts.
+  void stream_chat(const std::shared_ptr<Request>& req, httplib::Response& res);
 
  private:
   void setup_routes();
@@ -46,6 +49,8 @@ class HttpServer {
   const Tokenizer* tok_;
   ModelConfig cfg_;
   std::string model_name_;
+  std::function<bool()> ready_;
+  int max_ctx_;
   httplib::Server svr_;
   std::atomic<long> counter_{0};
 };

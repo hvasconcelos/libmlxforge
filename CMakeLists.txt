@@ -37,6 +37,7 @@ add_library(xllm_core STATIC
   src/tokenizer/tokenizer.cpp
   src/server/openai.cpp
   src/server/http_server.cpp
+  src/server/config.cpp
 )
 target_include_directories(xllm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(xllm_core PUBLIC mlx nlohmann_json::nlohmann_json Threads::Threads tokenizers_cpp httplib::httplib)

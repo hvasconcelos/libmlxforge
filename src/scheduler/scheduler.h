@@ -17,8 +17,12 @@ namespace xllm {
 
 class Scheduler {
  public:
-  // Submit a request from any thread; wakes the worker.
-  void submit(const std::shared_ptr<Request>& req);
+  // Bound the waiting queue (0 = unbounded); submit() rejects beyond this.
+  void set_max_waiting(int max) { max_waiting_ = max; }
+
+  // Submit a request from any thread; wakes the worker. Returns false if the
+  // waiting queue is full (the caller should reply 429).
+  bool submit(const std::shared_ptr<Request>& req);
 
   // Worker-side: block until a waiting request is available or stop() is called.
   // Returns nullptr when the scheduler is stopping and drained.
@@ -38,6 +42,7 @@ class Scheduler {
   mutable std::mutex m_;
   std::condition_variable cv_;
   std::deque<std::shared_ptr<Request>> waiting_;
+  int max_waiting_ = 0;  // 0 = unbounded
   bool stop_ = false;
 };
 

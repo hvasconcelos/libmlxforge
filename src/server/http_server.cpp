@@ -20,11 +20,13 @@ json error_body(const std::string& message, const std::string& type, const std::
 }  // namespace
 
 HttpServer::HttpServer(Scheduler* scheduler, const Tokenizer* tokenizer, ModelConfig config,
-                       std::string model_name)
+                       std::string model_name, std::function<bool()> ready, int max_ctx)
     : sched_(scheduler),
       tok_(tokenizer),
       cfg_(std::move(config)),
-      model_name_(std::move(model_name)) {
+      model_name_(std::move(model_name)),
+      ready_(std::move(ready)),
+      max_ctx_(max_ctx) {
   // Each streaming connection holds a worker thread for its whole lifetime, so
   // size the pool well above the expected concurrency (default is ~8).
   svr_.new_task_queue = [] { return new httplib::ThreadPool(64); };
@@ -45,10 +47,9 @@ std::shared_ptr<Request> HttpServer::make_request(const ChatRequest& cr) const {
   return req;
 }
 
-nlohmann::json HttpServer::run_blocking(const ChatRequest& cr) {
-  auto req = make_request(cr);
+nlohmann::json HttpServer::run_blocking(const std::shared_ptr<Request>& req,
+                                       const ChatRequest& cr) {
   const int prompt_tokens = static_cast<int>(req->prompt_ids.size());
-  sched_->submit(req);
 
   std::vector<int> out;
   int tok = 0;
@@ -72,9 +73,7 @@ nlohmann::json HttpServer::run_blocking(const ChatRequest& cr) {
           {"usage", make_usage(prompt_tokens, completion_tokens)}};
 }
 
-void HttpServer::stream_chat(const ChatRequest& cr, httplib::Response& res) {
-  auto req = make_request(cr);
-  sched_->submit(req);
+void HttpServer::stream_chat(const std::shared_ptr<Request>& req, httplib::Response& res) {
   const std::string id = next_id("chatcmpl-");
   const long created = static_cast<long>(std::time(nullptr));
   const std::string model = model_name_;
@@ -123,23 +122,39 @@ void HttpServer::setup_routes() {
     res.set_content(make_models_list(model_name_).dump(), "application/json");
   });
 
-  auto handle = [this](bool chat, const httplib::Request& req, httplib::Response& res) {
+  auto fail = [](httplib::Response& res, int status, const std::string& msg, const std::string& type,
+                 const std::string& code) {
+    res.status = status;
+    res.set_content(error_body(msg, type, code).dump(), "application/json");
+  };
+
+  auto handle = [this, fail](bool chat, const httplib::Request& http_req, httplib::Response& res) {
+    if (ready_ && !ready_()) {
+      fail(res, 503, "model is still loading", "server_error", "model_loading");
+      return;
+    }
     try {
-      json body = json::parse(req.body);
+      json body = json::parse(http_req.body);
       ChatRequest cr = chat ? parse_chat_request(body) : parse_completion_request(body);
+      auto req = make_request(cr);
+      if (max_ctx_ > 0 && static_cast<int>(req->prompt_ids.size()) > max_ctx_) {
+        fail(res, 400, "prompt exceeds the maximum context length", "invalid_request_error",
+             "context_length_exceeded");
+        return;
+      }
+      if (!sched_->submit(req)) {
+        fail(res, 429, "server is overloaded; retry later", "rate_limit_error", "queue_full");
+        return;
+      }
       if (chat && cr.stream) {
-        stream_chat(cr, res);
+        stream_chat(req, res);
       } else {
-        res.set_content(run_blocking(cr).dump(), "application/json");
+        res.set_content(run_blocking(req, cr).dump(), "application/json");
       }
     } catch (const json::parse_error& e) {
-      res.status = 400;
-      res.set_content(error_body(e.what(), "invalid_request_error", "bad_json").dump(),
-                      "application/json");
+      fail(res, 400, e.what(), "invalid_request_error", "bad_json");
     } catch (const std::exception& e) {
-      res.status = 400;
-      res.set_content(error_body(e.what(), "invalid_request_error", "invalid_params").dump(),
-                      "application/json");
+      fail(res, 400, e.what(), "invalid_request_error", "invalid_params");
     }
   };
 
