@@ -120,16 +120,23 @@ LlamaModel::QKV LlamaModel::attn_qkv(const mx::array& x, int layer, int offset) 
   return {apply_rope(q, offset), apply_rope(k, offset), v};
 }
 
-mx::array LlamaModel::attention(const mx::array& x, int layer) const {
+mx::array LlamaModel::attention(const mx::array& x, int layer, int offset, KVCache* cache) const {
   const int B = x.shape()[0];
   const int L = x.shape()[1];
 
-  QKV qkv = attn_qkv(x, layer);  // q (B, n_heads, L, head_dim), k/v use n_kv_heads
+  QKV qkv = attn_qkv(x, layer, offset);  // q (B, n_heads, L, head_dim), k/v use n_kv_heads
+  if (cache) {
+    auto kv = cache->update_and_fetch(layer, qkv.k, qkv.v);
+    qkv.k = kv.first;
+    qkv.v = kv.second;
+  }
   const float scale = 1.0f / std::sqrt(static_cast<float>(cfg_.head_dim));
 
-  // GQA is handled natively by SDPA when q_heads > kv_heads.
-  mx::array out = mx::fast::scaled_dot_product_attention(qkv.q, qkv.k, qkv.v, scale,
-                                                         /*mask_mode=*/"causal");
+  // Multi-token chunks (prefill) are causal; a single decode token attends over
+  // the whole cached history unmasked. GQA is handled natively by SDPA.
+  const std::string mask_mode = L > 1 ? "causal" : "";
+  mx::array out =
+      mx::fast::scaled_dot_product_attention(qkv.q, qkv.k, qkv.v, scale, mask_mode);
 
   // (B, n_heads, L, head_dim) -> (B, L, n_heads*head_dim)
   out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}), {B, L, cfg_.n_heads * cfg_.head_dim});
@@ -143,17 +150,21 @@ mx::array LlamaModel::mlp(const mx::array& x, int layer) const {
   return linear(mx::multiply(silu, up), layer_key(layer, "mlp.down_proj.weight"));
 }
 
-mx::array LlamaModel::decoder_block(const mx::array& x, int layer) const {
-  mx::array h = mx::add(x, attention(x, layer));
+mx::array LlamaModel::decoder_block(const mx::array& x, int layer, int offset,
+                                   KVCache* cache) const {
+  mx::array h = mx::add(x, attention(x, layer, offset, cache));
   mx::array post = rms_norm(h, layer_w(layer, "post_attention_layernorm.weight"));
   return mx::add(h, mlp(post, layer));
 }
 
-mx::array LlamaModel::forward(const mx::array& tokens) const {
+mx::array LlamaModel::forward(const mx::array& tokens, KVCache* cache) const {
+  const int offset = cache ? cache->offset() : 0;
   mx::array h = embed(tokens);
   for (int layer = 0; layer < cfg_.n_layers; ++layer) {
-    h = decoder_block(h, layer);
+    h = decoder_block(h, layer, offset, cache);
   }
+  if (cache) cache->advance(tokens.shape()[1]);  // one offset bump per token sweep
+
   h = rms_norm(h, w_.at("model.norm.weight"));
   // LM head: a separate lm_head when present, else the tied input embedding.
   const std::string head_key =

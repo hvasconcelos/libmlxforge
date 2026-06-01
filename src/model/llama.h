@@ -8,6 +8,7 @@
 
 #include "mlx/array.h"
 
+#include "cache/kv_cache.h"
 #include "core/config.h"
 #include "core/weights.h"
 
@@ -46,20 +47,24 @@ class LlamaModel {
   };
   QKV attn_qkv(const mx::array& x, int layer, int offset = 0) const;
 
-  // Self-attention sublayer (prefill, causal): QKV -> SDPA -> o_proj.
-  // Input/output are the residual-stream shape (B, L, hidden).
-  mx::array attention(const mx::array& x, int layer) const;
+  // Self-attention sublayer: QKV (RoPE at `offset`) -> optional cache append ->
+  // SDPA (causal for multi-token chunks, unmasked for single-token decode) ->
+  // o_proj. Input/output are the residual-stream shape (B, L, hidden).
+  mx::array attention(const mx::array& x, int layer, int offset = 0,
+                      KVCache* cache = nullptr) const;
 
   // SwiGLU MLP sublayer: down(silu(gate(x)) * up(x)).
   mx::array mlp(const mx::array& x, int layer) const;
 
-  // One full decoder layer (prefill, causal): attention + MLP with residuals.
-  mx::array decoder_block(const mx::array& x, int layer) const;
+  // One full decoder layer: attention + MLP with residuals.
+  mx::array decoder_block(const mx::array& x, int layer, int offset = 0,
+                          KVCache* cache = nullptr) const;
 
-  // Full forward pass (prefill, causal): embedding -> n_layers decoder layers ->
-  // final RMSNorm -> LM head (separate lm_head if present, else tied embedding).
-  // tokens (B, L) -> logits (B, L, vocab).
-  mx::array forward(const mx::array& tokens) const;
+  // Full forward pass: embedding -> n_layers decoder layers -> final RMSNorm ->
+  // LM head (separate lm_head if present, else tied embedding). tokens (B, L) ->
+  // logits (B, L, vocab). With a cache, RoPE/attention use cache.offset() and
+  // the cache is appended and advanced by L (prefill once, then decode L=1).
+  mx::array forward(const mx::array& tokens, KVCache* cache = nullptr) const;
 
  private:
   // y = x @ W^T for an HF Linear weight W (out, in) stored under `weight_key`.
