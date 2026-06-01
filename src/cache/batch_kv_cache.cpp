@@ -1,5 +1,7 @@
 #include "cache/batch_kv_cache.h"
 
+#include <algorithm>
+#include <utility>
 #include <vector>
 
 #include "mlx/ops.h"
@@ -13,6 +15,12 @@ mx::array neg(const std::vector<int>& v) {
   std::vector<int> out(v.size());
   for (size_t i = 0; i < v.size(); ++i) out[i] = -v[i];
   return mx::array(out.data(), {static_cast<int>(out.size())}, mx::int32);
+}
+
+// Slice [start, stop) along the sequence axis (2), keeping axes 0/1/3 full.
+mx::array slice_seq(const mx::array& a, int start, int stop) {
+  const auto& s = a.shape();
+  return mx::slice(a, {0, 0, start, 0}, {s[0], s[1], stop, s[3]});
 }
 }  // namespace
 
@@ -66,10 +74,104 @@ std::pair<mx::array, mx::array> BatchKVCache::update_and_fetch(int layer, const 
           mx::slice(*values_[layer], {0, 0, 0, 0}, {B, H, end, Dv})};
 }
 
+std::pair<mx::array, mx::array> BatchKVCache::fetch(int layer) const {
+  return {slice_seq(*keys_[layer], 0, idx_), slice_seq(*values_[layer], 0, idx_)};
+}
+
 void BatchKVCache::advance(int n_tokens) {
   idx_ += n_tokens;
   offset_ = mx::add(offset_, mx::array(n_tokens, mx::int32));
   mx::eval(offset_);  // keep the per-row bookkeeping materialized
+}
+
+namespace {
+int scalar_int(const mx::array& a) {
+  mx::array e = mx::astype(a, mx::int32);
+  mx::eval(e);
+  return e.item<int>();
+}
+}  // namespace
+
+void BatchKVCache::filter(const std::vector<int>& keep) {
+  mx::array idxs(keep.data(), {static_cast<int>(keep.size())}, mx::int32);
+  for (int l = 0; l < static_cast<int>(keys_.size()); ++l) {
+    if (keys_[l].has_value()) {
+      keys_[l] = mx::take(*keys_[l], idxs, /*axis=*/0);
+      values_[l] = mx::take(*values_[l], idxs, /*axis=*/0);
+    }
+  }
+  offset_ = mx::take(offset_, idxs, /*axis=*/0);
+  left_padding_ = mx::take(left_padding_, idxs, /*axis=*/0);
+  batch_ = static_cast<int>(keep.size());
+
+  // Shift left to drop any padding common to all surviving rows.
+  const int min_left_pad = scalar_int(mx::min(left_padding_, /*keepdims=*/false));
+  if (min_left_pad > 0) {
+    for (int l = 0; l < static_cast<int>(keys_.size()); ++l) {
+      if (keys_[l].has_value()) {
+        keys_[l] = slice_seq(*keys_[l], min_left_pad, keys_[l]->shape()[2]);
+        values_[l] = slice_seq(*values_[l], min_left_pad, values_[l]->shape()[2]);
+      }
+    }
+    idx_ -= min_left_pad;
+    left_padding_ = mx::subtract(left_padding_, mx::array(min_left_pad, mx::int32));
+  }
+  mx::eval(offset_, left_padding_);
+}
+
+void BatchKVCache::merge(BatchKVCache& other) {
+  if (other.batch_ == 0) return;
+  if (batch_ == 0) {
+    keys_ = other.keys_;
+    values_ = other.values_;
+    offset_ = other.offset_;
+    left_padding_ = other.left_padding_;
+    idx_ = other.idx_;
+    batch_ = other.batch_;
+    return;
+  }
+
+  const int max_idx = std::max(idx_, other.idx_);
+  const int l1 = s_cap();
+  const int l2 = other.s_cap();
+  const int max_size = std::max(l1, l2);
+
+  // Pad one cache's layer `l` so it is right-justified at max_idx and sized
+  // max_size on the sequence axis. Returns the padded K and V.
+  auto pad_layer = [&](BatchKVCache& c, int l) -> std::pair<mx::array, mx::array> {
+    mx::array k = *c.keys_[l];
+    mx::array v = *c.values_[l];
+    const int len = k.shape()[2];
+    const int left = max_idx - c.idx_;
+    int right = max_size - len - left;
+    if (right < 0) {  // trim the unused tail
+      k = slice_seq(k, 0, len + right);
+      v = slice_seq(v, 0, len + right);
+      right = 0;
+    }
+    if (left != 0 || right != 0) {
+      std::vector<std::pair<int, int>> pw = {{0, 0}, {0, 0}, {left, right}, {0, 0}};
+      k = mx::pad(k, pw);
+      v = mx::pad(v, pw);
+    }
+    return {k, v};
+  };
+
+  for (int l = 0; l < static_cast<int>(keys_.size()); ++l) {
+    auto a = pad_layer(*this, l);
+    auto b = pad_layer(other, l);
+    keys_[l] = mx::concatenate({a.first, b.first}, /*axis=*/0);
+    values_[l] = mx::concatenate({a.second, b.second}, /*axis=*/0);
+  }
+
+  // left_padding grows by the left-pad each side received; offset is unchanged.
+  mx::array lp_a = mx::add(left_padding_, mx::array(max_idx - idx_, mx::int32));
+  mx::array lp_b = mx::add(other.left_padding_, mx::array(max_idx - other.idx_, mx::int32));
+  left_padding_ = mx::concatenate({lp_a, lp_b}, /*axis=*/0);
+  offset_ = mx::concatenate({offset_, other.offset_}, /*axis=*/0);
+  idx_ = max_idx;
+  batch_ += other.batch_;
+  mx::eval(offset_, left_padding_);
 }
 
 }  // namespace xllm

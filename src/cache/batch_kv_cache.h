@@ -47,6 +47,19 @@ class BatchKVCache {
   // Advance the shared offset/idx by `n_tokens` (call once after all layers).
   void advance(int n_tokens);
 
+  // Populated K/V slice [..., :idx, :] for a layer (for inspection/tests).
+  std::pair<mx::array, mx::array> fetch(int layer) const;
+
+  // Eviction: keep only the given batch rows (take on axis 0) across every
+  // layer's K/V plus offset/left_padding, then shift off any common left
+  // padding. `keep` indexes the current batch rows.
+  void filter(const std::vector<int>& keep);
+
+  // Admission: pad this cache and `other` to a common S_cap (right-justified by
+  // write index) and concatenate on the batch axis. Used to admit a freshly
+  // prefilled batch into the decode cache.
+  void merge(BatchKVCache& other);
+
  private:
   int batch_;
   int idx_ = 0;

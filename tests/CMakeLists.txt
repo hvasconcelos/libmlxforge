@@ -13,6 +13,7 @@ add_executable(xllm_tests
   model/llama_forward_test.cpp
   cache/kv_cache_test.cpp
   cache/batch_kv_cache_test.cpp
+  cache/batch_kv_filter_merge_test.cpp
 )
 target_include_directories(xllm_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(xllm_tests PRIVATE xllm_core doctest::doctest)
