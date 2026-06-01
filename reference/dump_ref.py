@@ -95,6 +95,22 @@ def main():
     embeddings = model.model.embed_tokens(primary_ids)  # (1, T, hidden)
     save("embeddings", embeddings)
 
+    # Front-half of layer 0 (XLLM-006 gate): input RMSNorm, then RoPE'd Q/K and
+    # the (un-roped) V, each (1, n_heads, T, head_dim). Mirrors Attention.__call__.
+    layer0 = model.model.layers[0]
+    attn = layer0.self_attn
+    x_normed = layer0.input_layernorm(embeddings)  # (1, T, hidden)
+    save("attn_norm0", x_normed)
+    B, T, _ = embeddings.shape
+    q = attn.q_proj(x_normed).reshape(B, T, attn.n_heads, -1).transpose(0, 2, 1, 3)
+    k = attn.k_proj(x_normed).reshape(B, T, attn.n_kv_heads, -1).transpose(0, 2, 1, 3)
+    v = attn.v_proj(x_normed).reshape(B, T, attn.n_kv_heads, -1).transpose(0, 2, 1, 3)
+    save("rope_freqs", attn.rope._freqs)  # (head_dim/2,) llama3-rescaled freqs
+    save("q_pre0", q)  # pre-RoPE queries (1, 32, T, 64)
+    save("q_rope0", attn.rope(q))  # (1, 32, T, 64)
+    save("k_rope0", attn.rope(k))  # (1, 8, T, 64)
+    save("v0", v)  # (1, 8, T, 64)
+
     # Block-0 output: exactly what LlamaModel.__call__ computes for layer 0
     # (XLLM-007 gate).
     mask = create_attention_mask(embeddings, cache=None)

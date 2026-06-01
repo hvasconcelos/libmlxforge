@@ -31,7 +31,7 @@ inline mx::array load_npy(const std::string& name) { return mx::load(ref_path(na
 
 // Load an int32 .npy token-id fixture as a flat vector<int>.
 inline std::vector<int> load_token_ids(const std::string& name) {
-  mx::array a = mx::astype(load_npy(name), mx::int32);
+  mx::array a = mx::contiguous(mx::astype(load_npy(name), mx::int32));
   mx::eval(a);
   const int32_t* p = a.data<int32_t>();
   return std::vector<int>(p, p + a.size());
@@ -74,8 +74,10 @@ inline CompareResult compare_close(const mx::array& actual, const mx::array& exp
     return {false, "shape mismatch: actual " + shape_str(actual.shape()) + " vs expected " +
                        shape_str(expected.shape())};
   }
-  mx::array a = mx::astype(actual, mx::float32);
-  mx::array b = mx::astype(expected, mx::float32);
+  // data<float>() reads the raw row-major buffer, so non-contiguous inputs
+  // (e.g. a transposed view) must be materialized contiguous first.
+  mx::array a = mx::contiguous(mx::astype(actual, mx::float32));
+  mx::array b = mx::contiguous(mx::astype(expected, mx::float32));
   mx::eval(a, b);
   const float* pa = a.data<float>();
   const float* pb = b.data<float>();

@@ -47,6 +47,56 @@
       ],
       "dtype": "float16"
     },
+    "attn_norm0": {
+      "shape": [
+        1,
+        6,
+        2048
+      ],
+      "dtype": "float16"
+    },
+    "rope_freqs": {
+      "shape": [
+        32
+      ],
+      "dtype": "float32"
+    },
+    "q_pre0": {
+      "shape": [
+        1,
+        32,
+        6,
+        64
+      ],
+      "dtype": "float16"
+    },
+    "q_rope0": {
+      "shape": [
+        1,
+        32,
+        6,
+        64
+      ],
+      "dtype": "float16"
+    },
+    "k_rope0": {
+      "shape": [
+        1,
+        8,
+        6,
+        64
+      ],
+      "dtype": "float16"
+    },
+    "v0": {
+      "shape": [
+        1,
+        8,
+        6,
+        64
+      ],
+      "dtype": "float16"
+    },
     "block0": {
       "shape": [
         1,
