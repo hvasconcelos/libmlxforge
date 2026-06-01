@@ -69,6 +69,30 @@ TEST_CASE("MLXFORGE-021: chat template matches mlx-lm exactly") {
   CHECK(ids == load_token_ids("chat_ids.npy"));
 }
 
+TEST_CASE("MLXFORGE-021: Mistral chat template renders the [INST] format (no model needed)") {
+  using mlxforge::ChatFormat;
+  using Msg = mlxforge::Tokenizer::Message;
+
+  CHECK(mlxforge::chat_format_from_model_type("mistral") == ChatFormat::Mistral);
+  CHECK(mlxforge::chat_format_from_model_type("llama") == ChatFormat::Llama3);
+  CHECK(mlxforge::chat_format_from_model_type("") == ChatFormat::Llama3);
+
+  // Single user turn: BOS (added by the encoder) + a leading space (the
+  // SentencePiece prefix metaspace) + "[INST] ... [/INST]".
+  CHECK(mlxforge::Tokenizer::render_chat_template({{"user", "What is the capital of France?"}},
+                                                  /*add_generation_prompt=*/true,
+                                                  /*today_date=*/"", ChatFormat::Mistral) ==
+        " [INST] What is the capital of France? [/INST]");
+
+  // Multi-turn: a leading system message folds into the first user turn; each
+  // assistant turn is terminated by </s>.
+  std::vector<Msg> convo = {
+      {"system", "Be brief."}, {"user", "Hi"}, {"assistant", "Hello"}, {"user", "Bye"}};
+  CHECK(mlxforge::Tokenizer::render_chat_template(convo, /*add_generation_prompt=*/true,
+                                                  /*today_date=*/"", ChatFormat::Mistral) ==
+        " [INST] Be brief.\n\nHi [/INST]Hello</s>[INST] Bye [/INST]");
+}
+
 TEST_CASE("MLXFORGE-021: streaming detokenizer never emits broken UTF-8") {
   if (!model_available()) {
     MESSAGE("MLXFORGE_MODEL_DIR not present; skipping");

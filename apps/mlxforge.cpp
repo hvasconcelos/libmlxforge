@@ -39,7 +39,9 @@ int main(int argc, char** argv) {
   }
 
   mlxforge::ModelConfig cfg = mlxforge::ModelConfig::from_file(sc.model_dir + "/config.json");
-  mlxforge::Tokenizer tok = mlxforge::Tokenizer::from_file(sc.model_dir + "/tokenizer.json");
+  mlxforge::Tokenizer tok = mlxforge::Tokenizer::from_file(
+      sc.model_dir + "/tokenizer.json", cfg.bos_token_id,
+      mlxforge::chat_format_from_model_type(cfg.model_type));
 
   mlxforge::Scheduler scheduler;
   scheduler.set_max_waiting(sc.max_waiting);

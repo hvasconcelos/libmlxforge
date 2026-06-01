@@ -10,13 +10,14 @@ The C++ side loads the SAME repo and casts to fp16, so this reference is
 self-consistent: any divergence in C++ is a real bug, not a model mismatch.
 
 Usage:
-    reference/.venv/bin/python reference/dump_ref.py
+    reference/.venv/bin/python reference/dump_ref.py [--model llama|mistral]
 
-Outputs land in reference/fixtures/ (committed; tiny for a 1B model). A
-manifest.json records every array's shape + dtype for the C++ loader, and the
-resolved model revision for reproducibility.
+Outputs land in reference/fixtures/ (llama) or reference/fixtures_mistral/
+(committed; tiny). A manifest.json records every array's shape + dtype for the
+C++ loader, and the resolved model revision for reproducibility.
 """
 
+import argparse
 import json
 import os
 
@@ -25,12 +26,30 @@ import numpy as np
 from mlx_lm import load
 from mlx_lm.models.base import create_attention_mask
 
-# Public bf16 repo (the gated fp16 repo needs a Llama license + HF token; this
-# is the same architecture and we cast to fp16 below, matching the C++ engine).
-MODEL_REPO = "mlx-community/Llama-3.2-1B-Instruct-bf16"
-# Exact snapshot the fixtures were dumped from (recorded for reproducibility).
-MODEL_REVISION = "863c846a9ac6fad4e49e1743d52984dff262e953"
-COMPUTE_DTYPE = mx.float16
+# Per-model dump settings. The C++ engine loads the SAME repo, so each reference
+# is self-consistent: any divergence in C++ is a real bug, not a model mismatch.
+#   - llama: public bf16 repo (the gated fp16 repo needs a license); cast to fp16
+#     to match the C++ engine, which loads bf16 and casts on load.
+#   - mistral: a 4-bit repo with no system role in its chat template; keep the
+#     weights quantized (no cast) so both sides use identical 4-bit weights.
+MODELS = {
+    "llama": {
+        "repo": "mlx-community/Llama-3.2-1B-Instruct-bf16",
+        "fixtures": "fixtures",
+        # Cast bf16 -> fp16 to mirror the C++ engine's load.
+        "compute_dtype": mx.float16,
+        # The Llama-3.2 chat template has a system role with a date preamble.
+        "chat_messages": [{"role": "user", "content": "What is the capital of France?"}],
+    },
+    "mistral": {
+        "repo": "mlx-community/Mistral-7B-Instruct-v0.3-4bit",
+        "fixtures": "fixtures_mistral",
+        # Keep the 4-bit weights quantized (the C++ engine loads them as-is).
+        "compute_dtype": None,
+        # Mistral's [INST] template supports only user/assistant (no system role).
+        "chat_messages": [{"role": "user", "content": "What is the capital of France?"}],
+    },
+}
 
 # Fixed prompt set — committed so dumps are reproducible. Index 0 is the primary
 # prompt used for the forward-pass intermediates; the rest exercise tokenization
@@ -40,25 +59,31 @@ PROMPTS = [
     "Hello, world!",
     "Once upon a time, in a land far away,",
 ]
-# A chat-templated prompt (for MLXFORGE-021/022 template parity checks).
-CHAT_MESSAGES = [{"role": "user", "content": "What is the capital of France?"}]
 
 GREEDY_MAX_NEW = 20  # tokens of greedy continuation to dump for the primary prompt
 
-FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
-
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", choices=sorted(MODELS), default="llama")
+    args = ap.parse_args()
+    spec = MODELS[args.model]
+
+    MODEL_REPO = spec["repo"]
+    COMPUTE_DTYPE = spec["compute_dtype"]
+    CHAT_MESSAGES = spec["chat_messages"]
+    FIXTURES_DIR = os.path.join(os.path.dirname(__file__), spec["fixtures"])
+
     os.makedirs(FIXTURES_DIR, exist_ok=True)
     print(f"loading {MODEL_REPO} ...")
     model, tok = load(MODEL_REPO)
-    model.set_dtype(COMPUTE_DTYPE)
+    if COMPUTE_DTYPE is not None:
+        model.set_dtype(COMPUTE_DTYPE)
     mx.eval(model.parameters())
 
     manifest = {
         "model_repo": MODEL_REPO,
-        "model_revision": MODEL_REVISION,
-        "compute_dtype": "float16",
+        "compute_dtype": "float16" if COMPUTE_DTYPE is mx.float16 else "quantized",
         "prompts": PROMPTS,
         "chat_messages": CHAT_MESSAGES,
         "greedy_max_new": GREEDY_MAX_NEW,
@@ -105,11 +130,15 @@ def main():
     q = attn.q_proj(x_normed).reshape(B, T, attn.n_heads, -1).transpose(0, 2, 1, 3)
     k = attn.k_proj(x_normed).reshape(B, T, attn.n_kv_heads, -1).transpose(0, 2, 1, 3)
     v = attn.v_proj(x_normed).reshape(B, T, attn.n_kv_heads, -1).transpose(0, 2, 1, 3)
-    save("rope_freqs", attn.rope._freqs)  # (head_dim/2,) llama3-rescaled freqs
-    save("q_pre0", q)  # pre-RoPE queries (1, 32, T, 64)
-    save("q_rope0", attn.rope(q))  # (1, 32, T, 64)
-    save("k_rope0", attn.rope(k))  # (1, 8, T, 64)
-    save("v0", v)  # (1, 8, T, 64)
+    # The precomputed `_freqs` and the front-half RoPE intermediates are specific
+    # to the llama3-rescaled RoPE; plain-RoPE models (e.g. Mistral) lack `_freqs`
+    # and are covered end-to-end by the block-0/logits/greedy fixtures below.
+    if hasattr(attn.rope, "_freqs"):
+        save("rope_freqs", attn.rope._freqs)  # (head_dim/2,) llama3-rescaled freqs
+        save("q_pre0", q)  # pre-RoPE queries (1, 32, T, 64)
+        save("q_rope0", attn.rope(q))  # (1, 32, T, 64)
+        save("k_rope0", attn.rope(k))  # (1, 8, T, 64)
+        save("v0", v)  # (1, 8, T, 64)
 
     # Block-0 output: exactly what LlamaModel.__call__ computes for layer 0
     # (MLXFORGE-007 gate).

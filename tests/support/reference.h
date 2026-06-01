@@ -27,14 +27,20 @@ inline std::string ref_path(const std::string& name) {
 }
 
 // Load a .npy fixture as an MLX array (dtype preserved).
+inline mx::array load_npy_at(const std::string& dir, const std::string& name) {
+  return mx::load(dir + "/" + name);
+}
 inline mx::array load_npy(const std::string& name) { return mx::load(ref_path(name)); }
 
 // Load an int32 .npy token-id fixture as a flat vector<int>.
-inline std::vector<int> load_token_ids(const std::string& name) {
-  mx::array a = mx::contiguous(mx::astype(load_npy(name), mx::int32));
+inline std::vector<int> load_token_ids_at(const std::string& dir, const std::string& name) {
+  mx::array a = mx::contiguous(mx::astype(load_npy_at(dir, name), mx::int32));
   mx::eval(a);
   const int32_t* p = a.data<int32_t>();
   return std::vector<int>(p, p + a.size());
+}
+inline std::vector<int> load_token_ids(const std::string& name) {
+  return load_token_ids_at(MLXFORGE_REF_FIXTURES_DIR, name);
 }
 
 struct CompareResult {

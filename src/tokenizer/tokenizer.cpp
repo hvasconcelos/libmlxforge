@@ -6,9 +6,14 @@
 #include <sstream>
 #include <stdexcept>
 
+#include <nlohmann/json.hpp>
 #include <tokenizers_cpp.h>
 
 namespace mlxforge {
+
+ChatFormat chat_format_from_model_type(const std::string& model_type) {
+  return model_type == "mistral" ? ChatFormat::Mistral : ChatFormat::Llama3;
+}
 
 namespace {
 std::string load_file(const std::string& path) {
@@ -17,6 +22,20 @@ std::string load_file(const std::string& path) {
   std::ostringstream ss;
   ss << f.rdbuf();
   return ss.str();
+}
+
+// Collect the ids of every special token declared in a tokenizer.json blob
+// (added_tokens[*] with "special": true). These are skipped on decode, which
+// generalizes across model families (Llama reserves high ids, Mistral low ones).
+std::unordered_set<int> parse_special_ids(const std::string& blob) {
+  std::unordered_set<int> ids;
+  nlohmann::json j = nlohmann::json::parse(blob, /*cb=*/nullptr, /*allow_exceptions=*/false);
+  if (auto it = j.find("added_tokens"); it != j.end() && it->is_array()) {
+    for (const auto& tok : *it) {
+      if (tok.value("special", false) && tok.contains("id")) ids.insert(tok["id"].get<int>());
+    }
+  }
+  return ids;
 }
 
 // Today's date as "01 Jun 2026" (the format the Llama-3.2 template uses).
@@ -49,45 +68,48 @@ size_t utf8_complete_len(const std::string& s) {
 }
 }  // namespace
 
-Tokenizer Tokenizer::from_file(const std::string& tokenizer_json_path) {
+Tokenizer Tokenizer::from_file(const std::string& tokenizer_json_path, int bos_id, ChatFormat fmt) {
+  const std::string blob = load_file(tokenizer_json_path);
   Tokenizer t;
-  t.impl_ = tokenizers::Tokenizer::FromBlobJSON(load_file(tokenizer_json_path));
+  t.impl_ = tokenizers::Tokenizer::FromBlobJSON(blob);
+  t.bos_id_ = bos_id;
+  t.chat_format_ = fmt;
+  *t.special_ids_ = parse_special_ids(blob);
   return t;
 }
 
 std::vector<int> Tokenizer::encode(const std::string& text) const {
   // tokenizers-cpp's Encode does not run the BOS post-processor, so prepend the
-  // Llama-3.2 begin-of-text id (128000) to match mlx-lm's tok.encode.
-  constexpr int kBosId = 128000;
+  // configured begin-of-text id to match mlx-lm's tok.encode (none if < 0).
   std::lock_guard<std::mutex> lk(*mu_);
   std::vector<int32_t> ids = impl_->Encode(text);
   std::vector<int> out;
   out.reserve(ids.size() + 1);
-  out.push_back(kBosId);
+  if (bos_id_ >= 0) out.push_back(bos_id_);
   out.insert(out.end(), ids.begin(), ids.end());
   return out;
 }
 
 std::string Tokenizer::decode(const std::vector<int>& ids) const {
-  // Skip special tokens (Llama-3.2 reserves ids >= 128000), matching mlx-lm's
-  // skip_special_tokens default, since tokenizers-cpp Decode would render them.
-  constexpr int kFirstSpecialId = 128000;
+  // Drop the model's special tokens (parsed from tokenizer.json), matching
+  // mlx-lm's skip_special_tokens default, since tokenizers-cpp Decode renders them.
   std::vector<int32_t> keep;
   keep.reserve(ids.size());
   for (int id : ids)
-    if (id < kFirstSpecialId) keep.push_back(id);
+    if (!special_ids_->count(id)) keep.push_back(id);
   std::lock_guard<std::mutex> lk(*mu_);
   return impl_->Decode(keep);
 }
 
-std::string Tokenizer::render_chat_template(const std::vector<Message>& messages,
-                                            bool add_generation_prompt,
-                                            const std::string& today_date) {
+namespace {
+
+// Llama-3.2 chat template. The <|begin_of_text|> BOS is added by the encoder, so
+// it is omitted here; the system block carries the default knowledge/date preamble.
+std::string render_llama3(const std::vector<Tokenizer::Message>& messages,
+                          bool add_generation_prompt, const std::string& today_date) {
   const std::string date = today_date.empty() ? current_date() : today_date;
-  // <|begin_of_text|> is added by the encoder's post-processor, so it is omitted
-  // here. The system block carries the default knowledge/date preamble.
   std::string sys_content;
-  std::vector<Message> rest;
+  std::vector<Tokenizer::Message> rest;
   for (const auto& m : messages) {
     if (m.role == "system" && sys_content.empty())
       sys_content = m.content;
@@ -109,10 +131,50 @@ std::string Tokenizer::render_chat_template(const std::vector<Message>& messages
   return os.str();
 }
 
+// Mistral [INST] template. The <s> BOS is added by the encoder; </s> (eos) ends
+// each assistant turn; the model generates right after the final [/INST], so
+// add_generation_prompt needs no extra marker. The canonical template has no
+// system role, so a leading system message is folded into the first user turn.
+//
+// The leading space matches the SentencePiece prefix metaspace that mlx-lm emits
+// (it tokenizes to a standalone "▁" before the first [INST]); tokenizers-cpp's
+// Encode does not add it on its own, so it is part of the rendered string here.
+std::string render_mistral(const std::vector<Tokenizer::Message>& messages) {
+  std::string system;
+  std::ostringstream os;
+  os << " ";
+  bool first_user = true;
+  for (const auto& m : messages) {
+    if (m.role == "system") {
+      system = m.content;
+    } else if (m.role == "assistant") {
+      os << m.content << "</s>";
+    } else {  // user (default)
+      std::string content = m.content;
+      if (first_user && !system.empty()) {
+        content = system + "\n\n" + content;
+        system.clear();
+      }
+      first_user = false;
+      os << "[INST] " << content << " [/INST]";
+    }
+  }
+  return os.str();
+}
+
+}  // namespace
+
+std::string Tokenizer::render_chat_template(const std::vector<Message>& messages,
+                                            bool add_generation_prompt,
+                                            const std::string& today_date, ChatFormat fmt) {
+  if (fmt == ChatFormat::Mistral) return render_mistral(messages);
+  return render_llama3(messages, add_generation_prompt, today_date);
+}
+
 std::vector<int> Tokenizer::apply_chat_template(const std::vector<Message>& messages,
                                                 bool add_generation_prompt,
                                                 const std::string& today_date) const {
-  return encode(render_chat_template(messages, add_generation_prompt, today_date));
+  return encode(render_chat_template(messages, add_generation_prompt, today_date, chat_format_));
 }
 
 std::string StreamingDetokenizer::add(int id) {
