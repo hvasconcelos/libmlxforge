@@ -82,7 +82,9 @@ int run_dump_weights(const std::string& dir) {
 int run_generate(const std::string& dir, const std::string& prompt_arg, int max_tokens) {
   mlxforge::ModelConfig cfg = mlxforge::ModelConfig::from_file(dir + "/config.json");
   mlxforge::LlamaModel model(cfg, mlxforge::load_weights(dir));
-  mlxforge::Tokenizer tok = mlxforge::Tokenizer::from_file(dir + "/tokenizer.json");
+  mlxforge::Tokenizer tok = mlxforge::Tokenizer::from_file(
+      dir + "/tokenizer.json", cfg.bos_token_id,
+      mlxforge::chat_format_from_model_type(cfg.model_type));
 
   // A .npy argument is a pre-tokenized prompt; anything else is raw text run
   // through the chat template.
