@@ -7,9 +7,12 @@ add_executable(xllm_tests
   smoke_test.cpp
   core/config_test.cpp
   core/weights_test.cpp
+  support/reference_test.cpp
 )
+target_include_directories(xllm_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(xllm_tests PRIVATE xllm_core doctest::doctest)
 target_compile_definitions(xllm_tests PRIVATE
-  XLLM_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+  XLLM_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+  XLLM_REF_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/reference/fixtures")
 
 doctest_discover_tests(xllm_tests)
