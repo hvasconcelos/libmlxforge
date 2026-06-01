@@ -5,8 +5,12 @@
 //   xllm-cli dump-weights <dir>   load a model dir's weights (XLLM-004): print
 //                                 every key -> shape -> dtype, assert fp16, and
 //                                 report peak resident memory.
-//
-// The real single-stream generation loop arrives in XLLM-015.
+//   xllm-cli generate <dir> <prompt_ids.npy> [max_tokens]
+//                                 greedy single-stream generation (XLLM-015):
+//                                 prefill the pre-tokenized prompt and stream
+//                                 generated token ids to stdout until EOS or
+//                                 max_tokens (real text awaits the tokenizer,
+//                                 XLLM-021).
 
 #include <cstdio>
 #include <string>
@@ -14,7 +18,10 @@
 
 #include "mlx/mlx.h"
 
+#include "core/config.h"
 #include "core/weights.h"
+#include "model/llama.h"
+#include "runtime/single_stream.h"
 
 namespace mx = mlx::core;
 
@@ -65,15 +72,45 @@ int run_dump_weights(const std::string& dir) {
   return non_fp16 == 0 ? 0 : 1;
 }
 
+int run_generate(const std::string& dir, const std::string& prompt_npy, int max_tokens) {
+  xllm::ModelConfig cfg = xllm::ModelConfig::from_file(dir + "/config.json");
+  xllm::LlamaModel model(cfg, xllm::load_weights(dir));
+
+  // Load the pre-tokenized prompt ids from a .npy int array.
+  mx::array ids_arr = mx::contiguous(mx::astype(mx::load(prompt_npy), mx::int32));
+  mx::eval(ids_arr);
+  std::vector<int> prompt(ids_arr.data<int32_t>(), ids_arr.data<int32_t>() + ids_arr.size());
+
+  std::printf("prompt (%zu ids):", prompt.size());
+  for (int id : prompt) std::printf(" %d", id);
+  std::printf("\ngenerated:");
+  xllm::GenerateResult r = xllm::greedy_generate(
+      model, prompt, max_tokens, cfg.eos_token_ids, [](int id) {
+        std::printf(" %d", id);
+        std::fflush(stdout);
+      });
+  std::printf("\n%zu tokens%s\n", r.tokens.size(), r.hit_eos ? " (stopped at EOS)" : "");
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc >= 2 && std::string(argv[1]) == "dump-weights") {
+  const std::string cmd = argc >= 2 ? argv[1] : "";
+  if (cmd == "dump-weights") {
     if (argc < 3) {
       std::fprintf(stderr, "usage: xllm-cli dump-weights <model_dir>\n");
       return 2;
     }
     return run_dump_weights(argv[2]);
+  }
+  if (cmd == "generate") {
+    if (argc < 4) {
+      std::fprintf(stderr, "usage: xllm-cli generate <model_dir> <prompt_ids.npy> [max_tokens]\n");
+      return 2;
+    }
+    const int max_tokens = argc >= 5 ? std::stoi(argv[4]) : 64;
+    return run_generate(argv[2], argv[3], max_tokens);
   }
   return run_smoke();
 }
