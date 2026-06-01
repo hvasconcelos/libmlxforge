@@ -26,6 +26,7 @@ add_library(xllm_core STATIC
   src/model/llama.cpp
   src/cache/kv_cache.cpp
   src/cache/batch_kv_cache.cpp
+  src/cache/kv_budget.cpp
 )
 target_include_directories(xllm_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(xllm_core PUBLIC mlx nlohmann_json::nlohmann_json)
