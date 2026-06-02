@@ -1,0 +1,75 @@
+name: CI
+
+# Build the engine and run the test suite on every PR targeting master or develop.
+# mlxforge is Apple Silicon only (MLX Metal backend), so this runs on GitHub's
+# ARM64 macOS runners. The integration tests self-skip when the model isn't
+# present, so we don't download weights here — only the pure-logic units and the
+# golden-reference fixtures (committed under reference/fixtures/) are exercised.
+on:
+  pull_request:
+    branches:
+      - master
+      - develop
+
+# Cancel an in-progress run when the PR gets new pushes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test (Apple Silicon)
+    runs-on: macos-15  # ARM64 Apple Silicon runner — required for the Metal backend
+    timeout-minutes: 60
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: "0"  # use all available cores
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain versions
+        run: |
+          sw_vers
+          clang --version
+          cmake --version
+          cargo --version
+          xcodebuild -version
+
+      # tokenizers-cpp builds a Rust crate; cargo ships with the runner image,
+      # but ensure a toolchain is present and cache the registry/build artifacts.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      # MLX's Metal kernels need the Metal Toolchain component (the first build
+      # compiles them — this is the slow part).
+      - name: Download Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain
+
+      # Cache the fetched + built third-party deps (MLX, tokenizers, etc.).
+      # Keyed on the pinned-deps file so a deliberate bump busts the cache.
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'CMakeLists.txt') }}
+          restore-keys: |
+            deps-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
