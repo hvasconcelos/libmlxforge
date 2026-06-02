@@ -39,7 +39,7 @@ void init() {
     logger->set_level(level);
     logger->flush_on(spdlog::level::warn);
 
-    logger->set_pattern(env_or("MLXFORGE_LOG_PATTERN", "[%H:%M:%S.%e] [%^%l%$] %v"));
+    logger->set_pattern(env_or("MLXFORGE_LOG_PATTERN", "[%D %H:%M:%S.%e] [%^%l%$] %v"));
 
     spdlog::set_default_logger(logger);
   });
