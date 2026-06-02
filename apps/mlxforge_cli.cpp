@@ -10,10 +10,14 @@
 //     - Runs greedy single-stream generation: pre-fills the prompt (as raw text using the chat template
 //       or as a pre-tokenized .npy of ids), then streams the detokenized text to stdout until EOS or
 //       max_tokens.
+//   mlxforge-cli bench <model> [max_tokens] [runs]
+//     - Repeatable throughput benchmark over a fixed prompt: one discarded warmup run, then `runs`
+//       timed runs (defaults: max_tokens=128, runs=3) reporting time-to-first-token and decode tok/s.
 //
 // <dir>/<model> is either a local model directory or a HuggingFace repo id (e.g. mlx-community/Llama-3.2-1B-Instruct-4bit),
 // which will be downloaded on first use.
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -165,6 +169,55 @@ int run_generate(const std::string& spec, const std::string& prompt_arg, int max
   return 0;
 }
 
+// Repeatable throughput benchmark: a discarded warmup run absorbs Metal
+// kernel-compilation cost, then `runs` timed runs report TTFT and steady-state
+// decode tok/s. EOS is disabled (empty eos_ids) so every run generates exactly
+// `max_tokens` — fixed-length runs are what make the numbers comparable across
+// invocations and against mlx-lm. No detokenize callback, so decode timing is
+// the pure forward pass.
+int run_bench(const std::string& spec, int max_tokens, int runs) {
+  const std::string dir = mlxforge::resolve_model_dir(spec);
+  mlxforge::ModelConfig cfg = mlxforge::ModelConfig::from_file(dir + "/config.json");
+  mlxforge::LlamaModel model(cfg, mlxforge::load_weights(dir));
+  mlxforge::Tokenizer tok = mlxforge::Tokenizer::from_file(
+      dir + "/tokenizer.json", cfg.bos_token_id,
+      mlxforge::chat_format_from_model_type(cfg.model_type));
+
+  // A fixed prompt keeps prefill length (and therefore TTFT) constant.
+  const std::vector<int> prompt =
+      tok.apply_chat_template({{"user", "Write a short paragraph about the ocean."}});
+  const std::vector<int> no_eos;  // disable EOS so runs are exactly max_tokens long
+
+  mlxforge::log::info("bench: prompt={} tokens, max_tokens={}, warmup=1, runs={}", prompt.size(),
+                      max_tokens, runs);
+
+  // Warmup (discarded): triggers Metal kernel compilation and cache warmup.
+  mlxforge::greedy_generate(model, prompt, max_tokens, no_eos);
+
+  double ttft_sum = 0.0, tps_sum = 0.0;
+  double ttft_min = 1e300, ttft_max = 0.0, tps_min = 1e300, tps_max = 0.0;
+  for (int i = 0; i < runs; ++i) {
+    mlxforge::GenerateResult r = mlxforge::greedy_generate(model, prompt, max_tokens, no_eos);
+    const double tps = r.decode_tokens_per_second();
+    ttft_sum += r.ttft_ms;
+    tps_sum += tps;
+    ttft_min = std::min(ttft_min, r.ttft_ms);
+    ttft_max = std::max(ttft_max, r.ttft_ms);
+    tps_min = std::min(tps_min, tps);
+    tps_max = std::max(tps_max, tps);
+    std::printf("  run %d/%d:  ttft %.1f ms   decode %.1f tok/s  (%d tokens)\n", i + 1, runs,
+                r.ttft_ms, tps, r.decode_tokens);
+    std::fflush(stdout);
+  }
+
+  // Summary report goes to stdout (the benchmark's primary output, like
+  // dump-weights), so it shows regardless of log level.
+  std::printf("\nttft     mean %.1f ms   (min %.1f, max %.1f)\n", ttft_sum / runs, ttft_min,
+              ttft_max);
+  std::printf("decode   mean %.1f tok/s   (min %.1f, max %.1f)\n", tps_sum / runs, tps_min, tps_max);
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -190,6 +243,16 @@ int main(int argc, char** argv) {
     // Parse max_tokens if provided, otherwise default to 64
     const int max_tokens = argc >= 5 ? std::stoi(argv[4]) : 64;
     return run_generate(argv[2], argv[3], max_tokens);
+  }
+  if (cmd == "bench") {
+    // Repeatable throughput benchmark over a fixed prompt.
+    if (argc < 3) {
+      std::fprintf(stderr, "usage: mlxforge-cli bench <model_dir> [max_tokens] [runs]\n");
+      return 2;
+    }
+    const int max_tokens = argc >= 4 ? std::stoi(argv[3]) : 128;
+    const int runs = argc >= 5 ? std::stoi(argv[4]) : 3;
+    return run_bench(argv[2], max_tokens, runs);
   }
 
   // No subcommand: run the smoke test by default
