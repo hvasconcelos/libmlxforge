@@ -13,10 +13,9 @@ Primary model: `mlx-community/Llama-3.2-1B-Instruct` (fp16 by default; optional
 4-bit). 16 layers, hidden 2048, 32 query / 8 KV heads (GQA), head_dim 64,
 RMSNorm, RoPE (llama3 scaling), SwiGLU, tied embeddings.
 
-The forward pass is architecture-shared across the LLaMA family, so
-**Mistral-7B-Instruct-v0.3** is also supported (RMSNorm + SwiGLU + plain RoPE +
-GQA + separate LM head, no attention bias, no sliding window). See
-[Supported models](#supported-models).
+The forward pass is architecture-shared across the LLaMA family. Support is
+currently focused on Llama-3.2 to stabilize first; other families will be
+re-onboarded later. See [Supported models](#supported-models).
 
 ## Features
 
@@ -30,8 +29,8 @@ GQA + separate LM head, no attention bias, no sliding window). See
 - **Sampling as graph ops** — greedy, temperature, top-k, top-p (no host
   readback of logits).
 - **C++ tokenizer** — a from-scratch byte-level BPE over HF `tokenizer.json`
-  (no Rust), the chat template (Llama-3.2 or Mistral, selected from
-  `config.json`'s `model_type`), and UTF-8-safe incremental detokenization.
+  (no Rust), the Llama-3.2 chat template (selected from `config.json`'s
+  `model_type`), and UTF-8-safe incremental detokenization.
 - **OpenAI server** (cpp-httplib) — `/v1/chat/completions`, `/v1/completions`,
   `/v1/models`, `/health`; non-streaming and SSE streaming; cancellation on
   client disconnect; per-request metrics; OpenAI-shaped errors (400/429/503).
@@ -46,6 +45,8 @@ GQA + separate LM head, no attention bias, no sliding window). See
 - Apple Silicon (the MLX Metal backend) + the Xcode **Metal Toolchain**
   (`xcodebuild -downloadComponent MetalToolchain`).
 - CMake ≥ 3.24, a C++17 compiler (Apple clang).
+- System **libcurl** (shipped in the macOS SDK; found via `find_package(CURL)`) —
+  used to download models from the HuggingFace Hub.
 - (Optional, for regenerating golden fixtures) Python 3.12 + `mlx-lm`.
 
 All C++ dependencies (MLX, cpp-httplib, nlohmann/json, doctest, spdlog) are
@@ -68,47 +69,58 @@ Outputs:
 
 ## Get the model
 
+The server and CLI accept a model **spec** that is either a **HuggingFace repo
+id** or a **local directory** — pass it directly, llama.cpp-style:
+
 ```sh
-# fp16 (full precision)
-huggingface-cli download mlx-community/Llama-3.2-1B-Instruct-bf16
-# or 4-bit
-huggingface-cli download mlx-community/Llama-3.2-1B-Instruct-4bit
+# a repo id: downloaded on first use, then cached and reused
+./build/mlxforge-cli generate mlx-community/Llama-3.2-1B-Instruct-4bit "Hi" 32
+
+# a local model dir (any folder with config.json + tokenizer.json + safetensors)
+./build/mlxforge-cli generate /path/to/model "Hi" 32
 ```
 
-`MODEL_DIR` below is the resolved snapshot directory under
-`~/.cache/huggingface/hub/.../snapshots/<rev>` (or any local dir containing
-`config.json`, `tokenizer.json`, and `model.safetensors`).
+A repo-id spec is resolved in this order:
+
+1. an existing local directory containing `config.json` → used as-is;
+2. an existing HuggingFace parent dir (`…/models--org--name`) → its
+   `snapshots/<rev>/` is auto-resolved (so the cache parent path "just works");
+3. a repo already in the standard HF hub cache → that snapshot is reused;
+4. a repo already downloaded by mlxforge → that download is reused;
+5. otherwise it is **downloaded** (via libcurl) into mlxforge's own cache.
+
+The download cache defaults to `~/.cache/mlxforge` and is overridable with
+`MLXFORGE_CACHE`. The HF hub cache is honored too (`HF_HUB_CACHE` / `HF_HOME`),
+and a `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`) is sent for gated/private repos.
+
+`MODEL_DIR` in the examples below is any such spec — a repo id like
+`mlx-community/Llama-3.2-1B-Instruct-4bit`, or a local model directory.
+You can still pre-download with `huggingface-cli` if you prefer:
+
+```sh
+huggingface-cli download mlx-community/Llama-3.2-1B-Instruct-bf16   # fp16
+huggingface-cli download mlx-community/Llama-3.2-1B-Instruct-4bit   # 4-bit
+```
 
 ## Supported models
 
 | Family | Example repo | Chat format |
 | --- | --- | --- |
 | Llama-3.2 | `mlx-community/Llama-3.2-1B-Instruct-bf16` / `-4bit` | `<|start_header_id|>…` |
-| Mistral | `mlx-community/Mistral-7B-Instruct-v0.3-4bit` | `<s>[INST] … [/INST]` |
 
-The transformer (`model/llama`) is shared — adding the Mistral family needed no
-forward-pass changes, only tokenizer/chat-format work. The chat template is
-selected automatically from `config.json`'s `model_type`, and BOS / special-token
-handling is driven by `config.json` + `tokenizer.json` (no hard-coded ids), so
-pointing the server or CLI at a Mistral snapshot just works:
+The transformer (`model/llama`) is family-shared, and the chat template is
+selected from `config.json`'s `model_type` with BOS / special-token handling
+driven by `config.json` + `tokenizer.json` (no hard-coded ids). Support is
+currently limited to Llama-3.2 while the engine stabilizes; other families
+(which mostly need tokenizer/chat-format work, not forward-pass changes) will be
+re-onboarded later.
 
-```sh
-huggingface-cli download mlx-community/Mistral-7B-Instruct-v0.3-4bit
-./build/mlxforge-cli --model "$MISTRAL_DIR" "What is the capital of France?"
-```
-
-Each model is gated against its own `mlx-lm` golden reference. Regenerate the
+The model is gated against its `mlx-lm` golden reference. Regenerate the
 fixtures (rarely needed) with:
 
 ```sh
 reference/.venv/bin/python reference/dump_ref.py --model llama     # -> reference/fixtures/
-reference/.venv/bin/python reference/dump_ref.py --model mistral   # -> reference/fixtures_mistral/
 ```
-
-**Limitations.** Mistral's `[INST]` template has no system role, so a leading
-system message is folded into the first user turn. Sliding-window attention
-(Mistral v0.1) and tool/function-calling tokens are not implemented; v0.2/v0.3
-disable the sliding window and so run as plain causal attention.
 
 ## Run the server
 
@@ -224,6 +236,9 @@ Source layout (`src/`):
 |---|---|
 | `core/config` | parse `config.json` into `ModelConfig` (incl. rope_scaling, quantization) |
 | `core/weights` | load safetensors (single/sharded), sanitize keys, fp16-cast |
+| `core/model_source` | resolve a model spec (local dir or HF repo id) to a snapshot dir; HF-cache reuse + download |
+| `core/hf_download` | download HF repos via libcurl (list, filter, fetch through CDN redirect, atomic rename) |
+| `core/env` | `env_or`/`env_long` environment-variable helpers |
 | `model/llama` | the transformer: embedding, RMSNorm, RoPE, GQA SDPA, SwiGLU, LM head; fp16 + quantized paths; single-stream and batched forward |
 | `cache/kv_cache` | single-sequence KV cache |
 | `cache/batch_kv_cache` | batched, left-padded KV cache: `update_and_fetch`, `filter`, `merge`, `pad_dummies` |
@@ -259,5 +274,4 @@ For the full design see the [`doc/`](./doc) folder:
 mlxforge is released under the [MIT License](./LICENSE).
 
 Model weights are **not** covered by this license and remain subject to their
-own terms (e.g. the Llama Community License for the Llama-3.2 weights, and the
-Apache-2.0 license for Mistral-7B-Instruct-v0.3).
+own terms (e.g. the Llama Community License for the Llama-3.2 weights).
