@@ -36,13 +36,14 @@ add_library(mlxforge_core STATIC
   src/scheduler/scheduler.cpp
   src/runtime/worker.cpp
   src/runtime/batching.cpp
+  src/tokenizer/bpe.cpp
   src/tokenizer/tokenizer.cpp
   src/server/openai.cpp
   src/server/http_server.cpp
   src/server/config.cpp
 )
 target_include_directories(mlxforge_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(mlxforge_core PUBLIC mlx nlohmann_json::nlohmann_json Threads::Threads tokenizers_cpp httplib::httplib spdlog::spdlog)
+target_link_libraries(mlxforge_core PUBLIC mlx nlohmann_json::nlohmann_json Threads::Threads httplib::httplib spdlog::spdlog)
 target_compile_features(mlxforge_core PUBLIC cxx_std_17)
 
 # --- CLI binary (weight dump + single-stream generation) --------------------

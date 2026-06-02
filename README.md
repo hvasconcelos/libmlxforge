@@ -29,9 +29,9 @@ GQA + separate LM head, no attention bias, no sliding window). See
   step** over the whole batch; batch-size bucketing so the graph shape recurs.
 - **Sampling as graph ops** — greedy, temperature, top-k, top-p (no host
   readback of logits).
-- **C++ tokenizer** — HF `tokenizer.json` via `tokenizers-cpp`, the chat template
-  (Llama-3.2 or Mistral, selected from `config.json`'s `model_type`), and
-  UTF-8-safe incremental detokenization.
+- **C++ tokenizer** — a from-scratch byte-level BPE over HF `tokenizer.json`
+  (no Rust), the chat template (Llama-3.2 or Mistral, selected from
+  `config.json`'s `model_type`), and UTF-8-safe incremental detokenization.
 - **OpenAI server** (cpp-httplib) — `/v1/chat/completions`, `/v1/completions`,
   `/v1/models`, `/health`; non-streaming and SSE streaming; cancellation on
   client disconnect; per-request metrics; OpenAI-shaped errors (400/429/503).
@@ -46,11 +46,11 @@ GQA + separate LM head, no attention bias, no sliding window). See
 - Apple Silicon (the MLX Metal backend) + the Xcode **Metal Toolchain**
   (`xcodebuild -downloadComponent MetalToolchain`).
 - CMake ≥ 3.24, a C++17 compiler (Apple clang).
-- `cargo` / Rust — `tokenizers-cpp` builds the Rust HF `tokenizers` crate.
 - (Optional, for regenerating golden fixtures) Python 3.12 + `mlx-lm`.
 
-All C++ dependencies (MLX, cpp-httplib, nlohmann/json, doctest, tokenizers-cpp,
-spdlog) are fetched and pinned by CMake — see `cmake/Dependencies.cmake`.
+All C++ dependencies (MLX, cpp-httplib, nlohmann/json, doctest, spdlog) are
+fetched and pinned by CMake — see `cmake/Dependencies.cmake`. The tokenizer is
+our own C++ byte-level BPE, so there is no Rust/`cargo` requirement.
 
 ## Build
 
@@ -59,8 +59,8 @@ cmake -S . -B build
 cmake --build build --parallel
 ```
 
-The first build compiles MLX's Metal kernels and the Rust tokenizer crate, so it
-takes a few minutes. Outputs:
+The first build compiles MLX's Metal kernels, so it takes a few minutes.
+Outputs:
 
 - `build/mlxforge` — the OpenAI HTTP server
 - `build/mlxforge-cli` — CLI (weight dump + single-stream generation)
@@ -234,7 +234,8 @@ Source layout (`src/`):
 | `runtime/worker` | the single GPU worker: admit / decode / evict loop |
 | `runtime/batching` | prefill pass + batch-size bucketing |
 | `runtime/single_stream` | the CLI's greedy generation loop |
-| `tokenizer/tokenizer` | `tokenizers-cpp` wrapper, chat template, streaming detokenizer |
+| `tokenizer/tokenizer` | tokenizer facade: chat template, streaming detokenizer |
+| `tokenizer/bpe` | from-scratch byte-level BPE (encode/decode) over `tokenizer.json` |
 | `server/openai` | OpenAI request parse + response serialize (pure) |
 | `server/http_server` | routes, blocking + SSE handlers, error shapes |
 | `server/config` | CLI/env server configuration |

@@ -1,0 +1,78 @@
+name: CI
+
+# Build the engine and run the test suite on every PR targeting master or develop.
+# mlxforge is Apple Silicon only (MLX Metal backend), so this runs on GitHub's
+# ARM64 macOS runners. The integration tests self-skip when the model isn't
+# present, so we don't download weights here — only the pure-logic units and the
+# golden-reference fixtures (committed under reference/fixtures/) are exercised.
+on:
+  pull_request:
+    branches:
+      - master
+      - develop
+
+# Cancel an in-progress run when the PR gets new pushes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test (Apple Silicon)
+    runs-on: macos-15  # ARM64 Apple Silicon runner — required for the Metal backend
+    # The GitHub macos-15 arm64 runner is only 3 vCPU / 7GB, so a *cold* build
+    # (compiling MLX's Metal kernels from scratch) can take ~an hour. The cache
+    # below makes every later run fast, but the cache is only written when a run
+    # finishes — so the first run must be allowed to complete. Hence the generous
+    # timeout; subsequent cache-warm runs finish in a few minutes.
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Parallelize all cmake builds (including FetchContent subbuilds run during
+      # configure). Must be a positive integer — derive it from the CPU count.
+      - name: Set build parallelism
+        run: echo "CMAKE_BUILD_PARALLEL_LEVEL=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+
+      # The `-downloadComponent` flag (next step) only exists in Xcode 16+, and
+      # the runner's default Xcode isn't always recent enough — pin latest-stable.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show toolchain versions
+        run: |
+          sw_vers
+          clang --version
+          cmake --version
+          xcodebuild -version
+
+      # MLX's Metal kernels need the Metal Toolchain component (the first build
+      # compiles them — this is the slow part). Requires Xcode 16+; on some
+      # images it's already bundled, so treat "already installed" as success.
+      - name: Download Metal Toolchain
+        run: |
+          # Best-effort: a no-op when already bundled. If it's genuinely missing,
+          # the Build step fails at the Metal kernel compile with a clear error.
+          xcodebuild -downloadComponent MetalToolchain || echo "Metal Toolchain already present or download skipped"
+
+      # Cache the fetched + built third-party deps (MLX, spdlog, doctest, etc.).
+      # Keyed on the pinned-deps file so a deliberate bump busts the cache.
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'CMakeLists.txt') }}
+          restore-keys: |
+            deps-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
