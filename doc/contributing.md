@@ -10,13 +10,13 @@ docs first for the *what*; this document is the *how*.
   build hard-errors on non-Apple platforms.
 - The Xcode **Metal Toolchain**: `xcodebuild -downloadComponent MetalToolchain`.
 - **CMake ≥ 3.24** and a C++17 compiler (Apple clang).
-- **`cargo` / Rust** — `tokenizers-cpp` builds the Rust HF `tokenizers` crate.
 - *(Optional, only to regenerate golden fixtures)* Python 3.12 + `mlx-lm`.
 
 All C++ dependencies are fetched and pinned by CMake; you don't install them
 manually. See `cmake/Dependencies.cmake` for the exact pins (MLX v0.31.2,
-cpp-httplib v0.46.1, doctest v2.5.2, tokenizers-cpp; nlohmann/json is reused
-transitively from MLX). Bump pins deliberately.
+cpp-httplib v0.46.1, doctest v2.5.2, spdlog v1.15.3; nlohmann/json is reused
+transitively from MLX). Bump pins deliberately. The tokenizer is our own C++
+byte-level BPE, so there is no Rust/`cargo` requirement.
 
 ## Build, test, run
 
@@ -30,8 +30,8 @@ ctest --test-dir build -R kv_cache                       # run a subset by name
 ```
 
 - The test binary is `build/tests/mlxforge_tests` (note the `tests/` subdir).
-- MLX's Metal kernels and the Rust tokenizer crate make the **first** build slow
-  (minutes); incremental rebuilds of `mlxforge_tests` are fast.
+- MLX's Metal kernels make the **first** build slow (minutes); incremental
+  rebuilds of `mlxforge_tests` are fast.
 
 ### Adding a source file or a test
 
@@ -103,9 +103,11 @@ tokenizer. Each one is a bug that does not announce itself.
 - **One `async_eval` per decode step, over the whole batch** — never per-row,
   never per-layer. This is the highest-severity invariant; `Worker::decode_steps()`
   exists to prove it (the step count stays far below the token count under load).
-- **`tokenizers-cpp` is not thread-safe** — it stashes the last encode/decode
-  result inside the handle. `Tokenizer` guards `encode`/`decode` with a shared
-  mutex; keep it.
+- **The tokenizer is our own byte-level BPE** (`tokenizer/bpe.{h,cpp}`),
+  validated to byte-match the HF tokenizer against committed mlx-lm golden ids
+  (`reference/fixtures/tokenizer_corpus.json`). It is pure/`const`/thread-safe
+  (no mutex) and currently supports Llama-3.2-style byte-level BPE only —
+  `Tokenizer::from_file` throws on other families (e.g. Mistral's SentencePiece).
 - **Masks are additive fp16, never boolean** (avoids MLX bug #2894). See
   `LlamaModel::batch_mask`.
 - **RoPE is llama3-scaled.** `compute_rope_freqs` mirrors `mlx_lm`'s `Llama3RoPE`

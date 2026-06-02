@@ -7,11 +7,19 @@ template and special-token handling, which are selected automatically from
 
 ## Families that run today
 
-| Family | Example repo | Precision | Chat format |
-| --- | --- | --- | --- |
-| Llama-3.2 | `mlx-community/Llama-3.2-1B-Instruct-bf16` | fp16 (cast on load) | `<\|start_header_id\|>…` |
-| Llama-3.2 | `mlx-community/Llama-3.2-1B-Instruct-4bit` | 4-bit | `<\|start_header_id\|>…` |
-| Mistral | `mlx-community/Mistral-7B-Instruct-v0.3-4bit` | 4-bit | `<s>[INST] … [/INST]` |
+| Family | Example repo | Precision | Chat format | End-to-end |
+| --- | --- | --- | --- | --- |
+| Llama-3.2 | `mlx-community/Llama-3.2-1B-Instruct-bf16` | fp16 (cast on load) | `<\|start_header_id\|>…` | yes |
+| Llama-3.2 | `mlx-community/Llama-3.2-1B-Instruct-4bit` | 4-bit | `<\|start_header_id\|>…` | yes |
+| Mistral | `mlx-community/Mistral-7B-Instruct-v0.3-4bit` | 4-bit | `<s>[INST] … [/INST]` | forward pass only* |
+
+\* **Mistral is not end-to-end runnable right now.** Its tokenizer is
+SentencePiece/Metaspace, and the from-scratch tokenizer currently implements
+only Llama-3.2-style byte-level BPE — so `Tokenizer::from_file` throws on
+Mistral's `tokenizer.json` (the CLI/server can't tokenize it). The shared
+forward pass is still validated against the mlx-lm reference using committed
+token-id fixtures; reimplementing the SentencePiece tokenizer is the follow-up
+that restores end-to-end Mistral.
 
 The primary, frozen reference target is **Llama-3.2-1B-Instruct** (16 layers,
 hidden 2048, 32 query / 8 KV heads GQA, head_dim 64, RMSNorm, llama3-scaled RoPE,
