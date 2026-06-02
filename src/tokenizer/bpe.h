@@ -50,16 +50,17 @@ class BpeTokenizer {
   // Pre-tokenize a plain (special-token-free) segment and append its ids.
   void encode_plain(const std::string& segment, std::vector<int>& out) const;
 
-  std::unordered_map<std::string, int> token_to_id_;  // byte-level token -> id
-  std::vector<std::string> id_to_token_;              // id -> token (dense, for decode)
-  std::unordered_map<std::string, int> merge_ranks_;  // "L R" -> rank (merge priority)
-  std::unordered_set<int> special_ids_;
+  std::unordered_map<std::string, int>    token_to_id_;  // byte-level token -> id
+  std::vector<std::string>                id_to_token_;  // id -> token (dense, for decode)
+  std::unordered_map<std::string, int>    merge_ranks_;  // "L R" -> rank (merge priority)
+  std::unordered_set<int>                 special_ids_;
+
   // (literal, id) for every special added-token, sorted by descending literal
   // length so longest-match wins during segmentation.
   std::vector<std::pair<std::string, int>> special_tokens_;
   // First bytes of the special-token literals — a cheap pre-filter so the
   // segmentation scan only attempts matches where one could start.
-  std::unordered_set<unsigned char> special_first_bytes_;
+  std::unordered_set<unsigned char>       special_first_bytes_;
 };
 
 }  // namespace mlxforge
