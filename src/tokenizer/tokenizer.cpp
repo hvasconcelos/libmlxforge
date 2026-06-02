@@ -6,10 +6,8 @@
 #include <sstream>
 #include <stdexcept>
 
-#include <nlohmann/json.hpp>
-#include <tokenizers_cpp.h>
-
 #include "core/logging.h"
+#include "tokenizer/bpe.h"
 
 namespace mlxforge {
 
@@ -24,20 +22,6 @@ std::string load_file(const std::string& path) {
   std::ostringstream ss;
   ss << f.rdbuf();
   return ss.str();
-}
-
-// Collect the ids of every special token declared in a tokenizer.json blob
-// (added_tokens[*] with "special": true). These are skipped on decode, which
-// generalizes across model families (Llama reserves high ids, Mistral low ones).
-std::unordered_set<int> parse_special_ids(const std::string& blob) {
-  std::unordered_set<int> ids;
-  nlohmann::json j = nlohmann::json::parse(blob, /*cb=*/nullptr, /*allow_exceptions=*/false);
-  if (auto it = j.find("added_tokens"); it != j.end() && it->is_array()) {
-    for (const auto& tok : *it) {
-      if (tok.value("special", false) && tok.contains("id")) ids.insert(tok["id"].get<int>());
-    }
-  }
-  return ids;
 }
 
 // Today's date as "01 Jun 2026" (the format the Llama-3.2 template uses).
@@ -72,21 +56,23 @@ size_t utf8_complete_len(const std::string& s) {
 
 Tokenizer Tokenizer::from_file(const std::string& tokenizer_json_path, int bos_id, ChatFormat fmt) {
   const std::string blob = load_file(tokenizer_json_path);
+  if (!BpeTokenizer::is_supported(blob))
+    throw std::runtime_error("tokenizer: '" + tokenizer_json_path +
+                             "' is not a byte-level BPE tokenizer (only Llama-3.2-style is "
+                             "supported; e.g. Mistral's SentencePiece is not yet implemented)");
   Tokenizer t;
-  t.impl_ = tokenizers::Tokenizer::FromBlobJSON(blob);
+  t.impl_ = std::make_shared<BpeTokenizer>(BpeTokenizer::from_blob(blob));
   t.bos_id_ = bos_id;
   t.chat_format_ = fmt;
-  *t.special_ids_ = parse_special_ids(blob);
-  log::info("tokenizer: loaded vocab={} special_tokens={} bos_id={}", t.impl_->GetVocabSize(),
-            t.special_ids_->size(), bos_id);
+  log::info("tokenizer: loaded vocab={} special_tokens={} bos_id={}", t.impl_->vocab_size(),
+            t.impl_->special_ids().size(), bos_id);
   return t;
 }
 
 std::vector<int> Tokenizer::encode(const std::string& text) const {
-  // tokenizers-cpp's Encode does not run the BOS post-processor, so prepend the
+  // BpeTokenizer::encode does not run the BOS post-processor, so prepend the
   // configured begin-of-text id to match mlx-lm's tok.encode (none if < 0).
-  std::lock_guard<std::mutex> lk(*mu_);
-  std::vector<int32_t> ids = impl_->Encode(text);
+  std::vector<int> ids = impl_->encode(text);
   std::vector<int> out;
   out.reserve(ids.size() + 1);
   if (bos_id_ >= 0) out.push_back(bos_id_);
@@ -97,13 +83,14 @@ std::vector<int> Tokenizer::encode(const std::string& text) const {
 
 std::string Tokenizer::decode(const std::vector<int>& ids) const {
   // Drop the model's special tokens (parsed from tokenizer.json), matching
-  // mlx-lm's skip_special_tokens default, since tokenizers-cpp Decode renders them.
-  std::vector<int32_t> keep;
+  // mlx-lm's skip_special_tokens default. BpeTokenizer::decode also skips them;
+  // this pre-filter keeps behavior explicit and independent of that.
+  const auto& special_ids = impl_->special_ids();
+  std::vector<int> keep;
   keep.reserve(ids.size());
   for (int id : ids)
-    if (!special_ids_->count(id)) keep.push_back(id);
-  std::lock_guard<std::mutex> lk(*mu_);
-  return impl_->Decode(keep);
+    if (!special_ids.count(id)) keep.push_back(id);
+  return impl_->decode(keep);
 }
 
 namespace {

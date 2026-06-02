@@ -193,7 +193,8 @@ path under `tests/`.
 | `runtime/worker` | The single GPU worker thread: the admit / decode / evict loop. |
 | `runtime/batching` | The prefill pass and the batch-size bucketing helper. |
 | `runtime/single_stream` | The CLI's greedy single-stream generation loop. |
-| `tokenizer/tokenizer` | `tokenizers-cpp` wrapper, the chat templates, and the UTF-8-safe streaming detokenizer. |
+| `tokenizer/tokenizer` | tokenizer facade: chat templates + the UTF-8-safe streaming detokenizer. |
+| `tokenizer/bpe` | from-scratch byte-level BPE (`BpeTokenizer`): encode/decode over `tokenizer.json`. |
 | `server/openai` | OpenAI request parsing + response serialization (pure functions, unit-tested). |
 | `server/http_server` | cpp-httplib routes, the blocking and SSE handlers, OpenAI error shapes. |
 | `server/config` | CLI-flag / environment server configuration. |

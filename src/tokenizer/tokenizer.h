@@ -1,18 +1,17 @@
-// C++ tokenizer over the HF tokenizer.json (mlc-ai/tokenizers-cpp, which wraps
-// the Rust `tokenizers` crate — no hand-rolled BPE). Provides
-// encode, decode, the chat template (Llama-3.2 or Mistral), and a streaming
-// detokenizer that never emits broken multi-byte UTF-8 / partial byte-BPE
-// characters.
+// C++ tokenizer over the HF tokenizer.json. encode/decode use our own
+// from-scratch byte-level BPE (BpeTokenizer, src/tokenizer/bpe.h) — no Rust /
+// tokenizers-cpp. Currently supports Llama-3.2-style byte-level BPE only
+// (from_file throws on anything else). Also provides the chat template
+// (Llama-3.2 or Mistral) and a streaming detokenizer that never emits broken
+// multi-byte UTF-8 / partial byte-BPE characters.
 #pragma once
 
 #include <memory>
-#include <mutex>
 #include <string>
-#include <unordered_set>
 #include <vector>
 
-namespace tokenizers {
-class Tokenizer;  // from tokenizers_cpp.h
+namespace mlxforge {
+class BpeTokenizer;  // from tokenizer/bpe.h
 }
 
 namespace mlxforge {
@@ -58,16 +57,12 @@ class Tokenizer {
                                           ChatFormat fmt = ChatFormat::Llama3);
 
  private:
-  std::shared_ptr<tokenizers::Tokenizer> impl_;
-  // tokenizers-cpp stashes the last encode/decode result inside the handle, so
-  // concurrent calls would race; serialize them. Shared across copies.
-  std::shared_ptr<std::mutex> mu_ = std::make_shared<std::mutex>();
+  // BpeTokenizer is pure/const and thread-safe, so encode/decode need no mutex.
+  // It also owns the special-token ids (parsed from tokenizer.json) that decode
+  // skips, replacing the Llama-only "id >= 128000" heuristic.
+  std::shared_ptr<BpeTokenizer> impl_;
   int bos_id_ = 128000;  // prepended on encode; -1 = none
   ChatFormat chat_format_ = ChatFormat::Llama3;
-  // Special-token ids parsed from tokenizer.json (added_tokens[*].special);
-  // skipped on decode, replacing the Llama-only "id >= 128000" heuristic.
-  std::shared_ptr<std::unordered_set<int>> special_ids_ =
-      std::make_shared<std::unordered_set<int>>();
 };
 
 // Incremental detokenizer: feed one new token id at a time; returns only the
