@@ -62,6 +62,39 @@ PROMPTS = [
 
 GREEDY_MAX_NEW = 20  # tokens of greedy continuation to dump for the primary prompt
 
+# Diverse strings exercising the byte-level BPE pre-tokenizer's edge cases
+# (whitespace runs, newlines, contractions, digits, punctuation, CJK, accented
+# Latin, emoji/ZWJ, code, and inline special tokens). Their mlx-lm token ids are
+# committed as golden fixtures so the from-scratch tokenizer can be validated
+# without a live HF-tokenizer oracle. Llama-only (byte-level BPE).
+TOKENIZER_CORPUS = [
+    "",
+    "The capital of France is Paris.",
+    "Hello, world!",
+    "don't I'll we've they're it's can't",
+    "DON'T SHOUT",
+    "spaces    here     and       more",
+    "  leading and trailing  ",
+    "tabs\tand\tmore\ttabs",
+    "newlines\n\nand\r\nwindows\r\nendings",
+    "mixed \n  \t whitespace \n\n",
+    "1 12 123 1234 100000 3.14159",
+    "snake_case camelCase kebab-case",
+    "for (int i = 0; i < n; ++i) { sum += a[i]; }",
+    "café naïve résumé Zürich",
+    "Ünïcödé ßharp",
+    "你好世界，今天天气很好。",
+    "こんにちは世界",
+    "Привет мир",
+    "emoji 😀 and 👨‍👩‍👧‍👦 family",
+    "math ∑∫√≠≤ symbols",
+    "<|begin_of_text|>hi<|eot_id|>",
+    "<|start_header_id|>user<|end_header_id|>\n\nWhat?<|eot_id|>",
+    "a<|eot_id|><|eot_id|>b",
+    "URL: https://example.com/path?q=1&x=2#frag",
+    "@user #hashtag $100 50% (parens) [brackets] {braces}",
+]
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -112,6 +145,14 @@ def main():
     # Chat-templated prompt IDs (template applied by mlx-lm's tokenizer).
     chat_ids = tok.apply_chat_template(CHAT_MESSAGES, add_generation_prompt=True)
     save("chat_ids", np.array(chat_ids, dtype=np.int32))
+
+    # Diverse tokenizer corpus -> committed golden ids (validates the from-scratch
+    # byte-level BPE; tok.encode includes BOS, matching mlxforge::Tokenizer::encode).
+    if args.model == "llama":
+        corpus = [{"text": s, "ids": [int(x) for x in tok.encode(s)]} for s in TOKENIZER_CORPUS]
+        with open(os.path.join(FIXTURES_DIR, "tokenizer_corpus.json"), "w") as f:
+            json.dump(corpus, f, ensure_ascii=False, indent=2)
+        print(f"  wrote tokenizer_corpus.json ({len(corpus)} strings)")
 
     # --- Forward-pass intermediates for the primary prompt -------------------
     primary_ids = mx.array(prompt_id_lists[0], dtype=mx.int32)[None]  # (1, T)

@@ -11,7 +11,6 @@
 #include "runtime/single_stream.h"
 #include "support/model_fixture.h"
 #include "support/reference.h"
-#include "tokenizer/tokenizer.h"
 
 #include "mlx/ops.h"
 
@@ -56,18 +55,7 @@ TEST_CASE("Mistral: forward-pass intermediates + greedy stream match the mlx-lm 
   assert_tokens_equal(r.tokens, expected_greedy);
 }
 
-TEST_CASE("Mistral: chat template encodes to the mlx-lm [INST] token stream") {
-  if (!mistral_available()) {
-    MESSAGE("MLXFORGE_MISTRAL_MODEL_DIR not present; skipping chat parity check");
-    return;
-  }
-  const mlxforge::ModelConfig& cfg = shared_mistral_model().config();
-  mlxforge::Tokenizer tok = mlxforge::Tokenizer::from_file(
-      mistral_model_dir() + "/tokenizer.json", cfg.bos_token_id,
-      mlxforge::chat_format_from_model_type(cfg.model_type));
-
-  std::vector<mlxforge::Tokenizer::Message> messages = {
-      {"user", "What is the capital of France?"}};
-  CHECK(tok.apply_chat_template(messages, /*add_generation_prompt=*/true) ==
-        load_token_ids_at(fixdir(), "chat_ids.npy"));
-}
+// NOTE: Mistral's tokenizer (SentencePiece/Metaspace) is not yet reimplemented
+// from scratch, so there is no end-to-end Mistral tokenizer parity test here.
+// The forward pass above (architecture-shared with Llama) is still validated
+// against the mlx-lm reference using committed token-id fixtures.
