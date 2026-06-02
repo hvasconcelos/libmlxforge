@@ -21,11 +21,14 @@ jobs:
     name: Build & test (Apple Silicon)
     runs-on: macos-15  # ARM64 Apple Silicon runner — required for the Metal backend
     timeout-minutes: 60
-    env:
-      CMAKE_BUILD_PARALLEL_LEVEL: "0"  # use all available cores
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Parallelize all cmake builds (including FetchContent subbuilds run during
+      # configure). Must be a positive integer — derive it from the CPU count.
+      - name: Set build parallelism
+        run: echo "CMAKE_BUILD_PARALLEL_LEVEL=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
 
       # The `-downloadComponent` flag (next step) only exists in Xcode 16+, and
       # the runner's default Xcode isn't always recent enough — pin latest-stable.
