@@ -27,6 +27,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The `-downloadComponent` flag (next step) only exists in Xcode 16+, and
+      # the runner's default Xcode isn't always recent enough — pin latest-stable.
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
       - name: Show toolchain versions
         run: |
           sw_vers
@@ -51,9 +58,13 @@ jobs:
             cargo-${{ runner.os }}-
 
       # MLX's Metal kernels need the Metal Toolchain component (the first build
-      # compiles them — this is the slow part).
+      # compiles them — this is the slow part). Requires Xcode 16+; on some
+      # images it's already bundled, so treat "already installed" as success.
       - name: Download Metal Toolchain
-        run: xcodebuild -downloadComponent MetalToolchain
+        run: |
+          # Best-effort: a no-op when already bundled. If it's genuinely missing,
+          # the Build step fails at the Metal kernel compile with a clear error.
+          xcodebuild -downloadComponent MetalToolchain || echo "Metal Toolchain already present or download skipped"
 
       # Cache the fetched + built third-party deps (MLX, tokenizers, etc.).
       # Keyed on the pinned-deps file so a deliberate bump busts the cache.
