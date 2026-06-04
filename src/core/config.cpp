@@ -83,6 +83,18 @@ ModelConfig ModelConfig::from_json(const nlohmann::json& j) {
   c.eos_token_ids = parse_eos_ids(j);
   c.rope_scaling = parse_rope_scaling(j);
 
+  // MoE fields are optional: absent in dense configs (num_experts stays 0, which
+  // leaves the dense SwiGLU path unchanged). moe_intermediate_size defaults to the
+  // dense intermediate_size; decoder_sparse_step defaults to 1 (every layer MoE).
+  c.num_experts = j.value("num_experts", 0);
+  c.num_experts_per_tok = j.value("num_experts_per_tok", 0);
+  c.moe_intermediate_size = j.value("moe_intermediate_size", c.intermediate_size);
+  c.decoder_sparse_step = j.value("decoder_sparse_step", 1);
+  c.norm_topk_prob = j.value("norm_topk_prob", false);
+  if (auto it = j.find("mlp_only_layers"); it != j.end() && it->is_array()) {
+    c.mlp_only_layers = it->get<std::vector<int>>();
+  }
+
   // If a quantization sub-object exists, extract its config fields as well.
   // The block carries top-level defaults (group_size/bits) plus, for
   // mixed-precision checkpoints, per-module overrides keyed by the module path

@@ -113,6 +113,7 @@ huggingface-cli download mlx-community/Llama-3.2-1B-Instruct-4bit   # 4-bit
 | Qwen3 (dense) | `mlx-community/Qwen3-0.6B-bf16` | fp16 (cast on load) | ChatML (`<\|im_start\|>…`) |
 | Qwen3 (dense) | `mlx-community/Qwen3-4B-4bit` | 4-bit (mixed bits ok) | ChatML (`<\|im_start\|>…`) |
 | Qwen3 (GGUF) | `Qwen/Qwen3-0.6B-GGUF` | Q4_0/Q4_1/Q8_0, Q4_K/Q5_K/Q6_K | ChatML (`<\|im_start\|>…`) |
+| Qwen3 (MoE) | `mlx-community/Qwen3-30B-A3B-4bit` | 4-bit / fp16 (mixed bits ok) | ChatML (`<\|im_start\|>…`) |
 
 The transformer (`model/llama`) is family-shared, and the chat template is
 selected from `config.json`'s `model_type` with BOS / special-token handling
@@ -120,8 +121,10 @@ driven by `config.json` + `tokenizer.json` (no hard-coded ids). **Qwen3 dense**
 models (0.6B–32B) run end-to-end: their three deltas over Llama-3.2 — per-head
 **QK-Norm**, the **ChatML** template (with an `enable_thinking` toggle), and
 single-digit number pre-tokenization — are all handled automatically. Qwen3 has
-no BOS token. Qwen3 **MoE** models (e.g. 30B-A3B, 235B-A22B) and the 11B/90B
-Llama vision variants are **not** supported. Loading is org-agnostic — any
+no BOS token. **Qwen3 MoE** models (e.g. 30B-A3B) also run: on the MoE layers the
+dense SwiGLU is replaced by a routed top-k mixture of experts (gather matmul, dense
+or quantized). The 11B/90B Llama vision variants are **not** supported. Loading is
+org-agnostic — any
 HuggingFace repo with safetensors weights, the canonical HF key layout, and a
 byte-level BPE `tokenizer.json` runs, so the 3B Llama-3.2 siblings and other
 quant formats work too. See [`doc/supported-models.md`](./doc/supported-models.md)

@@ -113,6 +113,39 @@ void absorb(std::unordered_map<std::string, mx::array>& out,
 }  // namespace
 
 namespace {
+// Mixture-of-experts checkpoints store the per-layer experts one of two ways:
+//   - raw HF: per-expert tensors "model.layers.{l}.mlp.experts.{e}.{proj}.weight"
+//   - mlx (pre-stacked): "model.layers.{l}.mlp.switch_mlp.{proj}.weight" of shape
+//     (num_experts, out, in) — what mlx_lm's Model.sanitize produces at convert.
+// The forward pass (gather_mm / gather_qmm) consumes the stacked form, so for the
+// raw layout we stack experts 0..num_experts-1 here, mirroring that sanitize step.
+// Quantized experts also carry ".scales"/".biases" siblings, which are stacked the
+// same way. Pre-stacked checkpoints have no "experts.0.*" key and are left as-is.
+void stack_moe_experts(Weights& w, const ModelConfig& cfg) {
+  if (cfg.num_experts <= 0) return;
+  static const char* kProjs[] = {"gate_proj", "up_proj", "down_proj"};
+  static const char* kSuffixes[] = {".weight", ".scales", ".biases"};
+  for (int l = 0; l < cfg.n_layers; ++l) {
+    const std::string base = "model.layers." + std::to_string(l) + ".mlp.";
+    for (const char* proj : kProjs) {
+      // Only act on the raw per-expert layout (expert 0 present).
+      if (!w.tensors.count(base + "experts.0." + proj + ".weight")) continue;
+      for (const char* suffix : kSuffixes) {
+        const std::string e0 = base + "experts.0." + proj + suffix;
+        if (!w.tensors.count(e0)) continue;  // e.g. no .biases for an fp16 expert
+        std::vector<mx::array> stack;
+        stack.reserve(cfg.num_experts);
+        for (int e = 0; e < cfg.num_experts; ++e) {
+          const std::string key = base + "experts." + std::to_string(e) + "." + proj + suffix;
+          stack.push_back(w.tensors.at(key));
+          w.tensors.erase(key);
+        }
+        w.tensors.emplace(base + "switch_mlp." + proj + suffix, mx::stack(stack));
+      }
+    }
+  }
+}
+
 // Record quant params for every quantized weight: any base with a ".scales"
 // sibling is quantized; its group_size/bits come from the model config (per-
 // module override if present, else the model defaults).
@@ -158,6 +191,7 @@ Weights load_weights(const std::string& model_dir, const ModelConfig& cfg) {
   if (non_fp16 > 0)
     log::warn("weights: {} tensors are not fp16 (expected for quantized models)", non_fp16);
 
+  stack_moe_experts(w, cfg);  // raw per-expert MoE tensors -> stacked switch_mlp
   index_quantized(w, cfg);
   if (!w.quant.empty())
     log::info("weights: {} quantized weights detected", w.quant.size());

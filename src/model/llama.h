@@ -63,6 +63,13 @@ class LlamaModel {
   // SwiGLU MLP sublayer: down(silu(gate(x)) * up(x)).
   mx::array mlp(const mx::array& x, int layer) const;
 
+  // Sparse mixture-of-experts MLP sublayer (Qwen3 MoE). Routes each token to its
+  // top-k experts (softmax over the router, top-k via argpartition), runs a
+  // per-expert SwiGLU, and sums the expert outputs weighted by the routing
+  // scores. Same residual-stream shape (B, L, hidden) as mlp(). Used on layers
+  // where config().is_moe_layer(layer) is true.
+  mx::array moe_mlp(const mx::array& x, int layer) const;
+
   // One full decoder layer: attention + MLP with residuals.
   mx::array decoder_block(const mx::array& x, int layer, int offset = 0,
                           KVCache* cache = nullptr) const;
@@ -92,6 +99,12 @@ class LlamaModel {
 
   // y = x @ W^T for an HF Linear weight W (out, in) stored under `weight_key`.
   mx::array linear(const mx::array& x, const std::string& weight_key) const;
+  // Per-expert gather matmul against a stacked SwitchLinear weight
+  // "model.layers.{layer}.mlp.switch_mlp.{proj}.weight" (num_experts, out, in),
+  // gathering the expert rows named by `inds`. Quantization-aware (gather_qmm
+  // when the weight has a ".scales" sibling, else gather_mm), mirroring linear().
+  mx::array switch_linear(const mx::array& x, int layer, const char* proj,
+                          const mx::array& inds) const;
   // Weight key for layer `i`, suffix e.g. "self_attn.q_proj.weight".
   std::string layer_key(int i, const std::string& suffix) const;
   // Norm/embedding weight for layer `i`, suffix e.g. "input_layernorm.weight".

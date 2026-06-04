@@ -28,6 +28,7 @@ h (B, L, hidden)
    │      h        = h + o_proj(a)                # residual
    │      h_norm   = RMSNorm(h, post_attention_layernorm)
    │      h        = h + down(silu(gate(h_norm)) * up(h_norm))   # SwiGLU, residual
+   │                  # (MoE layers route h_norm to top-k experts instead — see Sparse MoE MLP)
    │
    ▼
 h = RMSNorm(h, model.norm)
@@ -149,6 +150,28 @@ token at the same physical column**. The mask is **additive fp16, never boolean*
 `down(silu(gate(x)) * up(x))`, where `silu(z) = z * sigmoid(z)`. Three linear
 projections (`gate_proj`, `up_proj`, `down_proj`) with the intermediate width from
 `intermediate_size`.
+
+### Sparse MoE MLP (Qwen3 MoE)
+
+Some checkpoints replace the dense SwiGLU on a subset of layers with a
+**mixture-of-experts** block. `LlamaModel::decoder_block` picks per layer:
+`config().is_moe_layer(i)` is true when `num_experts > 0`, `i` is not in
+`mlp_only_layers`, and `(i+1) % decoder_sparse_step == 0` — otherwise the dense
+`mlp()` runs unchanged. `moe_mlp()` implements the sparse path:
+
+1. **Route.** `gates = softmax(gate(x))` over `num_experts` (the softmax is computed
+   in fp32 — `precise=true` — to match the reference).
+2. **Select top-k.** `argpartition` picks the `num_experts_per_tok` highest-scoring
+   experts per token; `take_along_axis` reads their scores (renormalized to sum to 1
+   when `norm_topk_prob`).
+3. **Per-expert SwiGLU.** Each token's chosen experts run `down(silu(gate)·up)` via a
+   *gather matmul* over the stacked `switch_mlp.{gate,up,down}_proj` weights
+   (`(num_experts, out, in)`): `gather_qmm` for quantized experts, `gather_mm` for
+   dense — the same per-weight quantization detection as `linear()`.
+4. **Combine.** The `k` expert outputs are summed weighted by the routing scores.
+
+The router (`mlp.gate`) is often quantized at a higher bit-width (8-bit) than the
+experts (4-bit); the per-weight detection handles the mix transparently.
 
 ### LM head
 

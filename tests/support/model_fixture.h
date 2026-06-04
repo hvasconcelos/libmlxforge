@@ -48,4 +48,21 @@ inline LlamaModel& shared_qwen3_model() {
   return model;
 }
 
+// Same, for the Qwen3 MoE model (sparse expert-routing integration tests).
+inline std::string qwen3_moe_model_dir() { return MLXFORGE_MODEL_DIR_QWEN3_MOE; }
+
+inline bool qwen3_moe_model_available() {
+  const std::string d = qwen3_moe_model_dir();
+  return !d.empty() && std::ifstream(d + "/config.json").good();
+}
+
+inline LlamaModel& shared_qwen3_moe_model() {
+  static LlamaModel model = [] {
+    ModelConfig cfg = ModelConfig::from_file(qwen3_moe_model_dir() + "/config.json");
+    Weights w = load_weights(qwen3_moe_model_dir(), cfg);
+    return LlamaModel(std::move(cfg), std::move(w));
+  }();
+  return model;
+}
+
 }  // namespace mlxforge::test
