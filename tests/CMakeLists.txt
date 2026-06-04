@@ -30,6 +30,7 @@ add_executable(mlxforge_tests
   tokenizer/tokenizer_test.cpp
   tokenizer/bpe_test.cpp
   server/openai_test.cpp
+  server/anthropic_test.cpp
   server/sse_test.cpp
   server/hardening_test.cpp
   model/quantized_test.cpp

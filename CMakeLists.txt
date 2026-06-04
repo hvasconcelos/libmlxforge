@@ -44,6 +44,7 @@ add_library(mlxforge_core STATIC
   src/tokenizer/bpe.cpp
   src/tokenizer/tokenizer.cpp
   src/server/openai.cpp
+  src/server/anthropic.cpp
   src/server/http_server.cpp
   src/server/config.cpp
 )

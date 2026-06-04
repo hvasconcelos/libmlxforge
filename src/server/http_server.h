@@ -47,7 +47,20 @@ class HttpServer {
   // it parses as a tool call, emitted as a single tool_calls delta.
   void stream_chat(const std::shared_ptr<Request>& req, httplib::Response& res, bool allow_tools);
 
+  // Anthropic Messages API analogues: drain into a {content:[blocks]} response,
+  // or stream the message_start / content_block_* / message_delta / message_stop
+  // event sequence. The tool-call buffering mirrors stream_chat.
+  nlohmann::json run_blocking_messages(const std::shared_ptr<Request>& req, const ChatRequest& cr);
+  void stream_messages(const std::shared_ptr<Request>& req, httplib::Response& res, bool allow_tools);
+
  private:
+  // Validate the model name, tokenize, bound the context, and submit. On any
+  // failure it calls `fail` (with the OpenAI-style status/type/code, which the
+  // Anthropic handler remaps) and returns nullptr.
+  using FailFn =
+      std::function<void(int, const std::string&, const std::string&, const std::string&)>;
+  std::shared_ptr<Request> submit_request(const ChatRequest& cr, const FailFn& fail);
+
   void setup_routes();
   std::string next_id(const char* prefix);
 
