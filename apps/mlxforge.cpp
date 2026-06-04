@@ -58,7 +58,7 @@ void print_banner() {
 ▐▌  ▐▌▐▌     ▐▌  ▐▛▀▀▘▐▌ ▐▌▐▛▀▚▖▐▌▝▜▌▐▛▀▀▘
 ▐▌  ▐▌▐▙▄▄▖▗▞▘▝▚▖▐▌   ▝▚▄▞▘▐▌ ▐▌▝▚▄▞▘▐▙▄▄▖ ⚒️
 
-   Local Inference on Apple MLX · OpenAI-compatible API
+   Local Inference on Apple MLX · OpenAI- & Anthropic-compatible API
 )");
   std::fflush(stdout);
 }
@@ -67,7 +67,7 @@ void print_banner() {
 // listing every flag, the model/config precedence, and the env-var overrides.
 void print_help() {
   std::puts(
-      "mlxforge — OpenAI-compatible LLM inference server on Apple MLX\n"
+      "mlxforge — OpenAI- & Anthropic-compatible LLM inference server on Apple MLX\n"
       "\n"
       "usage: mlxforge [-m <model>] [-c <conffile>] [options]\n"
       "\n"
