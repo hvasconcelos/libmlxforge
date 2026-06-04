@@ -16,7 +16,8 @@ namespace mlxforge {
 // Returns the chat format for a given model_type string: Qwen3/Qwen2 render the
 // ChatML template, everything else falls back to Llama-3.2.
 ChatFormat chat_format_from_model_type(const std::string& model_type) {
-  if (model_type == "qwen3" || model_type == "qwen2") return ChatFormat::Qwen3;
+  if (model_type == "qwen3" || model_type == "qwen3_moe" || model_type == "qwen2")
+    return ChatFormat::Qwen3;
   return ChatFormat::Llama3;
 }
 

@@ -49,6 +49,18 @@ MODELS = {
         "chat_messages": [{"role": "user", "content": "What is the capital of France?"}],
         "thinking": True,
     },
+    # Qwen3 MoE shares the dense Qwen3 attention (QK-Norm) and ChatML tokenizer;
+    # only the feed-forward block differs (sparse expert routing). The smallest
+    # MoE checkpoint is 30B-A3B; the 4bit repo keeps the download manageable.
+    # set_dtype(fp16) casts scales/norms to fp16 (packed 4-bit weights stay
+    # uint32), mirroring the C++ engine's load so the reference stays self-consistent.
+    "qwen3_moe": {
+        "repo": "mlx-community/Qwen3-30B-A3B-4bit",
+        "fixtures": "fixtures_qwen3_moe",
+        "compute_dtype": mx.float16,
+        "chat_messages": [{"role": "user", "content": "What is the capital of France?"}],
+        "thinking": True,
+    },
 }
 
 # Fixed prompt set — committed so dumps are reproducible. Index 0 is the primary
@@ -201,6 +213,20 @@ def main():
     mask = create_attention_mask(embeddings, cache=None)
     block0 = model.model.layers[0](embeddings, mask, None)  # (1, T, hidden)
     save("block0", block0)
+
+    # MoE-specific intermediates for layer 0 (gates the sparse expert block in
+    # isolation, the same discipline used for the dense front-half). Only dumped
+    # when layer 0 is a sparse-MoE block; dense models skip these. The MoE input is
+    # post_attention_layernorm(h), where h = embeddings + attention (i.e. the
+    # post-attention residual), exactly the tensor the C++ moe_mlp() receives.
+    mlp0 = model.model.layers[0].mlp
+    if hasattr(mlp0, "gate") and hasattr(mlp0, "switch_mlp"):
+        r = layer0.self_attn(layer0.input_layernorm(embeddings), mask, None)
+        h = embeddings + r
+        moe_in = layer0.post_attention_layernorm(h)  # MoE input (1, T, hidden)
+        gates = mx.softmax(mlp0.gate(moe_in), axis=-1, precise=True)  # router probs
+        save("moe_gates0", gates)  # (1, T, n_experts)
+        save("moe_out0", mlp0(moe_in))  # sparse MoE block output (1, T, hidden)
 
     # Full forward to logits; dump the last position + its argmax (gates the full forward pass).
     logits = model(primary_ids)  # (1, T, vocab)

@@ -53,6 +53,18 @@ struct ModelConfig {
   int max_position_embeddings = 0; ///< Max context length supported by positional embedding.
   bool tie_word_embeddings = true; ///< Whether to tie input/output word embeddings.
 
+  // ----- Mixture-of-Experts (MoE) parameters -----
+  /// Sparse-MoE models (e.g. Qwen3-30B-A3B) replace the dense SwiGLU MLP, on the
+  /// MoE layers, with a router that selects `num_experts_per_tok` of `num_experts`
+  /// per token. `num_experts == 0` means a dense model (every field below unused),
+  /// keeping the dense path byte-for-byte unchanged.
+  int num_experts = 0;            ///< Total routed experts per MoE layer (0 => dense model).
+  int num_experts_per_tok = 0;    ///< Experts selected per token (router top-k).
+  int moe_intermediate_size = 0;  ///< Expert MLP width (defaults to intermediate_size).
+  int decoder_sparse_step = 1;    ///< A layer is MoE iff (i+1) % decoder_sparse_step == 0 ...
+  std::vector<int> mlp_only_layers; ///< ... and i is not in this dense-only list.
+  bool norm_topk_prob = false;    ///< Renormalize the top-k routing scores to sum to 1.
+
   // ----- Quantization parameters -----
   /// Quantization settings (present in quantized models, absent for fp16).
   /// `quantized` is informational only: the forward pass detects quantization
@@ -73,6 +85,15 @@ struct ModelConfig {
     auto it = quant_overrides.find(base);
     if (it != quant_overrides.end()) return it->second;
     return {quant_group_size, quant_bits};
+  }
+
+  /// True if decoder layer `i` uses the sparse-MoE block rather than the dense
+  /// SwiGLU MLP. Mirrors mlx_lm's Qwen3MoeDecoderLayer selection rule.
+  bool is_moe_layer(int i) const {
+    if (num_experts <= 0) return false;
+    for (int only : mlp_only_layers)
+      if (only == i) return false;
+    return (i + 1) % decoder_sparse_step == 0;
   }
 
   // ----- RoPE scaling -----

@@ -17,14 +17,29 @@ distinguishing weights).
 | Qwen3 (dense) | `mlx-community/Qwen3-0.6B-bf16` | fp16 (cast on load) | ChatML (`<\|im_start\|>…`) | yes |
 | Qwen3 (dense, 4-bit) | `mlx-community/Qwen3-4B-4bit` | 4-bit (mixed bits ok) | ChatML (`<\|im_start\|>…`) | yes |
 | Qwen3 (GGUF) | `Qwen/Qwen3-0.6B-GGUF` | Q4_0/Q4_1/Q8_0, Q4_K/Q5_K/Q6_K | ChatML (`<\|im_start\|>…`) | yes |
+| Qwen3 (MoE) | `mlx-community/Qwen3-30B-A3B-4bit` | 4-bit / fp16 (mixed bits ok) | ChatML (`<\|im_start\|>…`) | yes |
 
 **Qwen3 dense** models (0.6B/1.7B/4B/8B/14B/32B) run end-to-end. They add three
 deltas over Llama-3.2, all handled automatically: per-head **QK-Norm** (an
 RMSNorm on each Q/K head before RoPE, gated on the `q_norm`/`k_norm` weights),
 the **ChatML** chat template (with an `enable_thinking` toggle for Qwen3's
 reasoning mode), and single-digit number pre-tokenization in the byte-level BPE.
-Qwen3 has **no BOS token**. Qwen3 **MoE** models (e.g. 30B-A3B, 235B-A22B) are
-**not** supported — their expert-routing MLP is a separate feature.
+Qwen3 has **no BOS token**.
+
+**Qwen3 MoE** models (e.g. 30B-A3B, 235B-A22B) run end-to-end too. They share the
+dense Qwen3 attention (QK-Norm) and ChatML tokenizer; the only delta is the
+feed-forward block. On the MoE layers (selected by `config.json`'s `num_experts`,
+`decoder_sparse_step`, and `mlp_only_layers`), the dense SwiGLU MLP is replaced by a
+**sparse mixture-of-experts** block: a router (`mlp.gate`) softmaxes over the experts,
+the top `num_experts_per_tok` are selected, each runs its own SwiGLU, and their outputs
+are summed weighted by the routing scores (optionally renormalized via
+`norm_topk_prob`). The per-expert weights are stored stacked as
+`model.layers.N.mlp.switch_mlp.{gate,up,down}_proj.weight` of shape
+`(num_experts, out, in)` — raw per-expert HF checkpoints (`…mlp.experts.{e}.…`) are
+stacked into that form on load. The experts run via MLX's gather matmul
+(`gather_qmm` when quantized, `gather_mm` otherwise), so 4-bit experts with an 8-bit
+router (the common mixed-precision layout) work transparently through the per-weight
+quantization detection.
 
 Other LLaMA-family models will be re-onboarded as needed; because the forward
 pass is shared, that work is mostly tokenizer/chat-format plus any small
@@ -137,9 +152,10 @@ constants:
 
 ## What is and isn't implemented
 
-**Supported:** GQA, RMSNorm, llama3-scaled and plain RoPE, SwiGLU, tied and
-untied LM heads, greedy / temperature / top-k / top-p sampling, single-stream and
-continuous-batched decode, and both safetensors and GGUF checkpoints.
+**Supported:** GQA, RMSNorm, llama3-scaled and plain RoPE, SwiGLU, **sparse
+mixture-of-experts** (Qwen3 MoE: routed top-k experts via gather matmul, dense and
+quantized), tied and untied LM heads, greedy / temperature / top-k / top-p sampling,
+single-stream and continuous-batched decode, and both safetensors and GGUF checkpoints.
 Quantization is detected **per-weight** (a `<base>.scales` sibling), so a
 checkpoint may mix quantized and dense tensors or vary the bit-width per layer:
 fp16, MLX affine quants (any bits/group_size, incl. mixed-precision repos), and
