@@ -15,9 +15,13 @@
 #                               tests, in their own single-process binary so that
 #                               large checkpoint is loaded once and its peak
 #                               memory is isolated from the other models.
+#   mlxforge_quantized_tests    the 4-bit footprint test, isolated because it
+#                               asserts an ABSOLUTE process peak-memory figure
+#                               (~0.7GiB) — only valid when no other model is
+#                               resident in the same process.
 #
-# All three self-skip when their model isn't cached (so CI, which downloads no
-# weights, runs only the pure-logic units + committed fixtures).
+# All self-skip when their model isn't cached (so CI, which downloads no weights,
+# runs only the pure-logic units + committed fixtures).
 include(doctest)
 
 # Pure-logic unit tests: no model weights, fast, granular ctest reporting.
@@ -51,7 +55,6 @@ add_executable(mlxforge_integration_tests
   model/llama_block_test.cpp
   model/llama_forward_test.cpp
   model/batched_decode_test.cpp
-  model/quantized_test.cpp
   model/qwen3_test.cpp
   runtime/single_stream_test.cpp
   runtime/prefill_test.cpp
@@ -66,6 +69,13 @@ add_executable(mlxforge_integration_tests
 add_executable(mlxforge_moe_tests
   doctest_main.cpp
   model/qwen3_moe_test.cpp
+)
+
+# 4-bit footprint test, isolated so its absolute peak-memory assertion measures
+# only the quantized model (a shared process would include the other checkpoints).
+add_executable(mlxforge_quantized_tests
+  doctest_main.cpp
+  model/quantized_test.cpp
 )
 
 # Resolve the local HF snapshot dir for integration tests (empty -> tests skip).
@@ -113,7 +123,8 @@ endif()
 # Shared wiring for every test binary: include path, links, and the fixture /
 # model-dir compile definitions (the binaries that don't touch a given model
 # simply ignore the corresponding define).
-set(_mlxforge_test_targets mlxforge_tests mlxforge_integration_tests mlxforge_moe_tests)
+set(_mlxforge_test_targets
+  mlxforge_tests mlxforge_integration_tests mlxforge_moe_tests mlxforge_quantized_tests)
 foreach(_t IN LISTS _mlxforge_test_targets)
   target_include_directories(${_t} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(${_t} PRIVATE mlxforge_core doctest::doctest)
@@ -137,4 +148,5 @@ doctest_discover_tests(mlxforge_tests)
 # timeout covers a cold run that also has to load weights from disk.
 add_test(NAME integration COMMAND mlxforge_integration_tests)
 add_test(NAME integration_moe COMMAND mlxforge_moe_tests)
-set_tests_properties(integration integration_moe PROPERTIES TIMEOUT 3600)
+add_test(NAME integration_quantized COMMAND mlxforge_quantized_tests)
+set_tests_properties(integration integration_moe integration_quantized PROPERTIES TIMEOUT 3600)
