@@ -1,13 +1,13 @@
-// Engine: the inference engine as a single embeddable object, with no HTTP
-// dependency. It performs the load-and-start sequence — resolve the model spec,
-// load the config + tokenizer (GGUF or safetensors), then construct and start
-// the GPU Worker over a Scheduler — and exposes the handful of accessors a
-// consumer needs (the HTTP server is one such consumer; an embedding app is
-// another).
+// Engine: core inference orchestrator — an embeddable object, not dependent on HTTP.
+// Handles the end-to-end model startup: resolves the user model spec (local dir, repo id, or .gguf),
+// loads config and tokenizer (GGUF or safetensors), and boots a Worker (on its own thread)
+// that interacts with the GPU. Sits above the Scheduler, which handles request submission.
+// The Engine exposes only minimal access points for a consumer: providing config, tokenizer,
+// the request submission seam, and status/metrics. Used both in HTTP servers and embedded apps.
 //
-// Submission goes through scheduler(): build a Request and call
-// scheduler().submit(req), then drain req->tokens. The Engine owns the Worker
-// thread (the only thread that touches MLX) for its whole lifetime.
+// Usage pattern: create an Engine, build a Request, submit via scheduler().submit(req),
+// then drain output tokens from req->tokens. The Engine owns its Worker for its lifetime;
+// only that thread directly calls into MLX, preserving thread-safety.
 #pragma once
 
 #include <string>
@@ -20,59 +20,70 @@
 
 namespace mlxforge {
 
+// Lightweight configuration for engine construction.
 struct EngineConfig {
-  std::string model_spec;  // local dir, HF repo id, or .gguf file (resolved internally)
-  int max_waiting = 256;   // scheduler waiting-queue bound (0 = unbounded)
+  std::string model_spec;  // Model description: local directory, HuggingFace repo id, or .gguf file path (to be resolved internally)
+  int max_waiting = 256;   // Maximum length of the Scheduler's waiting queue; 0 disables the cap
 };
 
 class Engine {
  public:
-  // Resolve the spec, load config + tokenizer on the calling thread, then start
-  // the worker (which loads the weights on its own thread). Throws on a bad spec
-  // or load failure.
+  // Constructor: resolves the model spec, loads config/tokenizer on the caller's thread,
+  // then spawns a Worker which loads weights and must be run on its own thread due to MLX constraints.
+  // Throws if the spec is invalid or there is a loading failure.
   explicit Engine(EngineConfig cfg);
-  ~Engine();  // drains in-flight requests (via Worker::stop) on destruction
+  ~Engine();  // Ensures all in-flight requests drain and the Worker thread stops cleanly
 
+  // Disable copying/moving: Engine must remain unique, as it manages thread-bound objects.
   Engine(const Engine&) = delete;
   Engine& operator=(const Engine&) = delete;
 
-  // The submission seam: consumers build a Request and scheduler().submit() it,
-  // then drain its token queue. Non-const because submit() mutates the queue.
+  // Main submission entrypoint: get a reference to the Scheduler for Request lifecycle/queueing.
+  // Non-const: users will submit() Requests, mutating scheduler state.
   Scheduler& scheduler() { return scheduler_; }
 
+  // Access the loaded Tokenizer (thread-safe constant interface)
   const Tokenizer& tokenizer() const { return tok_; }
+  // Access the loaded ModelConfig (i.e. model hyperparameters, architecture, etc)
   const ModelConfig& config() const { return cfg_; }
-  // The spec the user passed; echoed as the served model name (/v1/models).
+  // Access the resolved model name (as supplied by the user, useful for HTTP responses etc.)
   const std::string& model_name() const { return model_name_; }
 
-  bool ready() const { return worker_.ready(); }       // model finished loading?
+  // Query whether the model is loaded and ready for inference (Worker finished initialization)
+  bool ready() const { return worker_.ready(); }
+  // Fetch running metrics (queues, timing, active requests, etc.) from the Worker
   WorkerMetrics metrics() const { return worker_.metrics(); }
 
-  // Drain the waiting queue and join the worker thread. Idempotent; also run by
-  // the destructor, so an explicit call is only needed to drain early.
+  // Explicitly drain all remaining requests/queues and join/stop the Worker thread.
+  // Idempotent: also called by the destructor, so only use if early shutdown/drain is desired.
   void stop() { worker_.stop(); }
 
  private:
-  // The config + tokenizer parsed up front (no MLX arrays), plus where the
-  // weights live and how to load them — enough to build the worker's factory.
+  // Internal struct: stores everything loaded on the caller thread prior to Worker start
+  // (no MLX arrays instantiated yet — just config, tokenizer, and resolved model dir).
   struct Loaded {
-    std::string dir;
-    bool is_gguf = false;
-    ModelConfig config;
-    Tokenizer tokenizer;
+    std::string dir;           // Fully resolved model/weights directory
+    bool is_gguf = false;      // Was the model GGUF format?
+    ModelConfig config;        // Parsed model config
+    Tokenizer tokenizer;       // Parsed tokenizer
   };
+
+  // Resolve model spec path, parse config/tokenizer, etc.
   static Loaded load_head(const std::string& spec);
+  // Factory builder: creates a Worker::ModelFactory, handling weight loading with proper backend
   static Worker::ModelFactory make_factory(std::string dir, bool is_gguf);
 
-  // Delegated-to constructor: runs once load_head() has produced the head, so
-  // the members can be initialized (and ordered) directly.
+  // Private delegating ctor, used internally after head-loading step is complete.
   Engine(EngineConfig cfg, Loaded loaded);
 
-  std::string model_name_;
-  ModelConfig cfg_;
-  Tokenizer tok_;
-  // scheduler_ is declared before worker_: the worker stores &scheduler_, so the
-  // scheduler must outlive it (members destruct in reverse order).
+  // --- Engine state (order is important for destruction) ---
+
+  std::string model_name_;    // Echoes user-supplied spec (for e.g. server listing endpoints)
+  ModelConfig cfg_;           // Model config, immutable after load
+  Tokenizer tok_;             // Tokenizer, immutable after load
+
+  // Order of these two is critical:
+  // Scheduler must outlive Worker, because Worker holds a pointer to scheduler_.
   Scheduler scheduler_;
   Worker worker_;
 };
