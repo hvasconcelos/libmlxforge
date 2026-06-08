@@ -102,9 +102,26 @@ cmake --build build --parallel
 The first build compiles MLX's Metal kernels, so it takes a few minutes.
 Outputs:
 
-- `build/mlxforge` — the OpenAI HTTP server
-- `build/mlxforge-cli` — CLI (weight dump + single-stream generation)
+- `build/libmlxforge.dylib` — **the product**: the engine behind the C ABI
+  (`src/capi/mlxforge.h`); link this to embed mlxforge (see
+  [`doc/embedding.md`](./doc/embedding.md))
+- `build/mlxforge` — the OpenAI HTTP server *harness*
+- `build/mlxforge-cli` — CLI *harness* (weight dump + single-stream generation)
 - `build/tests/mlxforge_tests` — the doctest suite
+
+Build options (the harnesses are on by default for development; the released
+library is built with them off):
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `MLXFORGE_BUILD_SHARED` | `ON` | build `libmlxforge.dylib` (the C-ABI product) |
+| `MLXFORGE_BUILD_SERVER` | `ON` | build the HTTP server harness (pulls `cpp-httplib`) |
+| `MLXFORGE_BUILD_CLI` | `ON` | build the CLI harness |
+| `MLXFORGE_ENABLE_HF_DOWNLOAD` | `ON` | HuggingFace download (pulls `libcurl`) |
+
+A lean library build — `-DMLXFORGE_BUILD_SERVER=OFF -DMLXFORGE_BUILD_CLI=OFF
+-DMLXFORGE_ENABLE_HF_DOWNLOAD=OFF` — produces a `libmlxforge.dylib` with neither
+`cpp-httplib` nor `libcurl` linked.
 
 ## Get the model
 

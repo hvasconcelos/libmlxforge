@@ -4,11 +4,11 @@ This is the document to read first. It explains **what mlxforge is for**, why it
 occupies a niche nothing else in the MLX ecosystem does, and how you will embed it.
 
 > **Status.** The engine (scheduler, continuous batching, batched KV cache, tokenizer,
-> GGUF, chat templates, sampling) exists and is golden-reference-gated today. The
-> public **C ABI** (`src/capi/mlxforge.h`) and the language **bindings**
-> (`bindings/node` first) are the active work — the API shown below is the **design
-> target** that the roadmap is building toward, not yet a shipped interface. It is
-> documented here so the shape is settled before the code lands.
+> GGUF, chat templates, sampling) and the public **C ABI** (`src/capi/mlxforge.h`,
+> built as `libmlxforge`) exist and are golden-reference-gated today — the C-ABI
+> example below compiles and is exercised by `tests/capi`. The language **bindings**
+> (`bindings/node` first) plus structured output and embeddings are the active work;
+> where a snippet covers those it is marked **design target**.
 
 ## The product is the library
 
@@ -69,12 +69,20 @@ place where that is not enough:
 If you only need a stateless backend on a box you control, the HTTP server may be all
 you want. The binding's sweet spot is embedded and in-process use.
 
-## The C ABI (design target)
+## The C ABI
 
 One header, opaque handles, no C++ types across the boundary. Every fallible call
 reports through a `char** err`; C++ exceptions are never allowed to cross `extern "C"`.
 Strings are UTF-8 and freed by the caller via `mlxforge_string_free`. The ABI is
 append-only and versioned (`mlxforge_abi_version()`).
+
+Build it (the released library excludes the server/CLI harnesses, so the dylib carries
+no `cpp-httplib`; pass `-DMLXFORGE_ENABLE_HF_DOWNLOAD=OFF` to also drop `libcurl`):
+
+```sh
+cmake -S . -B build -DMLXFORGE_BUILD_SERVER=OFF -DMLXFORGE_BUILD_CLI=OFF
+cmake --build build --target mlxforge_shared      # -> build/libmlxforge.dylib + src/capi/mlxforge.h
+```
 
 ```c
 #include "mlxforge.h"
@@ -136,11 +144,12 @@ are documented as gaps rather than implied — see the roadmap.
 
 - **Real now:** the batched engine (`runtime/engine`, `scheduler/`, `cache/`), the
   tokenizer + chat templates, GGUF + safetensors loading, greedy / temperature / top-k /
-  top-p sampling, tool/function-calling plumbing, and the golden-reference gate. You can
-  drive all of it through the server/CLI harnesses today.
-- **Design target (in progress):** `src/capi/mlxforge.h`, the `bindings/node` package,
-  JSON-schema-constrained decoding, and an embeddings path. The APIs above are the
-  contract those will implement.
+  top-p sampling, tool/function-calling plumbing, the golden-reference gate, **and the C
+  ABI** (`src/capi/mlxforge.h` → `libmlxforge`, validated by `tests/capi`). The C-ABI
+  example above compiles and runs today.
+- **Design target (in progress):** the `bindings/node` package and its `engine.chat()`
+  surface, JSON-schema-constrained decoding, and an embeddings path. The Node snippet
+  above is the contract those will implement.
 
 ## See also
 
