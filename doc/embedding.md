@@ -3,12 +3,12 @@
 This is the document to read first. It explains **what mlxforge is for**, why it
 occupies a niche nothing else in the MLX ecosystem does, and how you will embed it.
 
-> **Status.** The engine (scheduler, continuous batching, batched KV cache, tokenizer,
-> GGUF, chat templates, sampling) and the public **C ABI** (`src/capi/mlxforge.h`,
-> built as `libmlxforge`) exist and are golden-reference-gated today — the C-ABI
-> example below compiles and is exercised by `tests/capi`. The language **bindings**
-> (`bindings/node` first) plus structured output and embeddings are the active work;
-> where a snippet covers those it is marked **design target**.
+> **Status.** Real today: the engine, the **C ABI** (`src/capi/mlxforge.h` →
+> `libmlxforge`, gated by `tests/capi`), the **Node** binding (`bindings/node`,
+> `@mlxforge/node`), and the **Swift** package (`bindings/swift`, `MLXForge`) — the
+> C-ABI, Node, and Swift examples below all compile and run. Still active work
+> (marked **design target** where shown): JSON-schema-constrained structured output
+> and embeddings, which are new engine features rather than binding work.
 
 ## The product is the library
 
@@ -114,14 +114,15 @@ Threading: all MLX work stays on the engine's single worker thread (MLX arrays a
 thread-bound); callers only ever touch their own `mlxforge_request`. The binding layer
 follows the same rule — see [`architecture.md`](./architecture.md).
 
-## Node binding (design target)
+## Node binding (`bindings/node`)
 
-The first binding. Published as `@mlxforge/node` with **prebuilt arm64 binaries**, so
-`npm install` needs no compiler. The surface mirrors `node-llama-cpp` to make migration
-near-zero-diff, while adding what it can't do on MLX: **batched concurrency**.
+`@mlxforge/node` — chat + streaming + batched concurrency, today. The surface mirrors
+`node-llama-cpp` to make migration near-zero-diff, while adding what it can't do on MLX:
+**batched concurrency**. (Source builds against the local dylib; a published package
+would ship a prebuilt `.node` + dylib so `npm install` needs no compiler.)
 
 ```js
-import { Engine } from "@mlxforge/node";
+const { Engine } = require("@mlxforge/node");
 
 const engine = await Engine.load("mlx-community/Llama-3.2-1B-Instruct-4bit");
 
@@ -135,21 +136,39 @@ const answers = await Promise.all(
 );
 ```
 
-Planned surface, in order: chat + streaming + tool calling (engine has these today) →
-JSON-schema / structured output (new constrained decoding in `sample/sampler`) →
-embeddings (new encoder model family). Until structured output and embeddings land, they
-are documented as gaps rather than implied — see the roadmap.
+## Swift package (`bindings/swift`)
+
+`MLXForge` — the same engine for native macOS/iOS apps, `async`/`AsyncSequence`-based.
+Apple's `MLXLLM` runs one stream; this serves many, batched, in one process.
+
+```swift
+import MLXForge
+
+let engine = try await Engine.load("mlx-community/Llama-3.2-1B-Instruct-4bit")
+for try await chunk in try engine.chat([.init(role: "user", content: "Tell me a joke.")]) {
+  print(chunk, terminator: "")
+}
+async let a = engine.complete([.init(role: "user", content: "Name a color.")])
+async let b = engine.complete([.init(role: "user", content: "Name a fruit.")])
+print(try await a, try await b)   // one batched engine
+```
+
+Remaining surface, in order: JSON-schema / structured output (new constrained decoding
+in `sample/sampler`) → embeddings (new encoder model family). Until those land they are
+documented as gaps rather than implied — see the roadmap.
 
 ## What is real today vs. design target
 
 - **Real now:** the batched engine (`runtime/engine`, `scheduler/`, `cache/`), the
   tokenizer + chat templates, GGUF + safetensors loading, greedy / temperature / top-k /
-  top-p sampling, tool/function-calling plumbing, the golden-reference gate, **and the C
-  ABI** (`src/capi/mlxforge.h` → `libmlxforge`, validated by `tests/capi`). The C-ABI
-  example above compiles and runs today.
-- **Design target (in progress):** the `bindings/node` package and its `engine.chat()`
-  surface, JSON-schema-constrained decoding, and an embeddings path. The Node snippet
-  above is the contract those will implement.
+  top-p sampling, tool/function-calling plumbing, the golden-reference gate, the C ABI
+  (`src/capi/mlxforge.h` → `libmlxforge`, validated by `tests/capi`), **and the Node and
+  Swift bindings** (`bindings/node`, `bindings/swift`). Every example above compiles and
+  runs today.
+- **Design target (in progress):** JSON-schema-constrained decoding (new work in
+  `sample/sampler`) and an embeddings path (a new encoder model family). These are
+  net-new engine features, not binding work, and are documented as gaps until they land
+  and are golden-gated.
 
 ## See also
 
