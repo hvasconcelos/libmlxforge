@@ -75,7 +75,9 @@ Engine::Engine(EngineConfig cfg, Loaded loaded)
     : model_name_(std::move(cfg.model_spec)),
       cfg_(std::move(loaded.config)),
       tok_(std::move(loaded.tokenizer)),
-      worker_(make_factory(std::move(loaded.dir), loaded.is_gguf), &scheduler_) {
+      // Pass the tokenizer so the worker can build per-token byte strings for
+      // constrained decoding. tok_ is initialized above and outlives worker_.
+      worker_(make_factory(std::move(loaded.dir), loaded.is_gguf), &scheduler_, &tok_) {
   // Configure the max waiting requests for the batch scheduler.
   scheduler_.set_max_waiting(cfg.max_waiting);
 

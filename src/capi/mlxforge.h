@@ -62,6 +62,11 @@ typedef struct {
   float presence_penalty;     /* 0 => disabled */
   unsigned long long seed;    /* RNG seed (used when temperature > 0) */
   int   max_tokens;           /* <= 0 => default (64) */
+  /* Constrained decoding (optional; NULL/empty => off): "json" forces any valid
+   * JSON value; otherwise a JSON-Schema string (supported subset: a top-level
+   * object with ordered, required, scalar-typed properties). The output is
+   * masked so it can only be well-formed JSON. */
+  const char* json_schema;
 } mlxforge_sampling;
 
 /* ---- Library info ---------------------------------------------------------*/

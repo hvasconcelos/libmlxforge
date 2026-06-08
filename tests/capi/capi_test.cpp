@@ -9,6 +9,8 @@
 #include <thread>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "capi/mlxforge.h"
 #include "support/model_fixture.h"
 
@@ -88,6 +90,64 @@ TEST_CASE("C ABI generates text and batches concurrent requests deterministicall
   for (int i = 0; i < N; ++i) {
     CHECK(outs[i] == baseline);  // batched greedy == single-stream greedy
     mlxforge_request_free(reqs[i]);
+  }
+
+  mlxforge_engine_free(eng);
+}
+
+TEST_CASE("C ABI constrained decoding forces well-formed JSON") {
+  if (!model_available()) {
+    MESSAGE("MLXFORGE_MODEL_DIR not present; skipping");
+    return;
+  }
+  char* err = nullptr;
+  mlxforge_engine* eng = mlxforge_engine_create(model_dir().c_str(), nullptr, &err);
+  REQUIRE_MESSAGE(eng != nullptr, (err ? err : "engine_create failed"));
+  while (!mlxforge_engine_ready(eng))
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+  // JSON mode: the output must be valid JSON regardless of the (small) model.
+  {
+    mlxforge_sampling s = {};
+    s.max_tokens = 96;
+    s.json_schema = "json";
+    mlxforge_msg msg = {"user", "Describe a person as a JSON object."};
+    mlxforge_request* r = mlxforge_submit_chat(eng, &msg, 1, &s, &err);
+    REQUIRE_MESSAGE(r != nullptr, (err ? err : "submit failed"));
+    const std::string out = drain(r);
+    const std::string reason = mlxforge_request_finish_reason(r);
+    mlxforge_request_free(r);
+    CAPTURE(out);
+    // Whether it stops or hits the token budget, the output is a valid JSON
+    // prefix; on a clean stop it is a complete, parseable value.
+    if (reason == "stop") {
+      auto parsed = nlohmann::json::parse(out, nullptr, /*allow_exceptions=*/false);
+      CHECK_FALSE(parsed.is_discarded());
+    }
+  }
+
+  // Schema mode: a top-level object with required typed keys, in order.
+  {
+    mlxforge_sampling s = {};
+    s.max_tokens = 96;
+    s.json_schema =
+        R"({"type":"object","properties":{"city":{"type":"string"},"population":{"type":"integer"}}})";
+    mlxforge_msg msg = {"user", "Give facts about Paris."};
+    mlxforge_request* r = mlxforge_submit_chat(eng, &msg, 1, &s, &err);
+    REQUIRE_MESSAGE(r != nullptr, (err ? err : "submit failed"));
+    const std::string out = drain(r);
+    const std::string reason = mlxforge_request_finish_reason(r);
+    mlxforge_request_free(r);
+    CAPTURE(out);
+    if (reason == "stop") {
+      auto parsed = nlohmann::json::parse(out, nullptr, /*allow_exceptions=*/false);
+      REQUIRE_FALSE(parsed.is_discarded());
+      CHECK(parsed.is_object());
+      CHECK(parsed.contains("city"));
+      CHECK(parsed.contains("population"));
+      CHECK(parsed["city"].is_string());
+      CHECK(parsed["population"].is_number_integer());
+    }
   }
 
   mlxforge_engine_free(eng);

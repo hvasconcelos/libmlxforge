@@ -15,8 +15,10 @@
 namespace {
 
 // Translate a JS sampling options object into the flat C struct. Missing fields
-// fall back to the C ABI's "disabled" sentinels (a zeroed struct => greedy).
-mlxforge_sampling parse_sampling(const Napi::Object& o) {
+// fall back to the C ABI's "disabled" sentinels (a zeroed struct => greedy). A
+// `jsonSchema`/`responseFormat` string is copied into `schema_out` (so it
+// outlives the submit call) and pointed at by the returned struct.
+mlxforge_sampling parse_sampling(const Napi::Object& o, std::string& schema_out) {
   mlxforge_sampling s = {};
   auto num = [&](const char* k, double def) -> double {
     return (o.Has(k) && o.Get(k).IsNumber()) ? o.Get(k).As<Napi::Number>().DoubleValue() : def;
@@ -30,6 +32,10 @@ mlxforge_sampling parse_sampling(const Napi::Object& o) {
   s.presence_penalty = static_cast<float>(num("presencePenalty", 0.0));
   s.seed = static_cast<unsigned long long>(num("seed", 0.0));
   s.max_tokens = static_cast<int>(num("maxTokens", 0.0));
+  if (o.Has("jsonSchema") && o.Get("jsonSchema").IsString())
+    schema_out = o.Get("jsonSchema").As<Napi::String>().Utf8Value();
+  else if (o.Has("responseFormat") && o.Get("responseFormat").IsString())
+    schema_out = o.Get("responseFormat").As<Napi::String>().Utf8Value();
   return s;
 }
 
@@ -232,9 +238,11 @@ class EngineWrap : public Napi::ObjectWrap<EngineWrap> {
       msgs.push_back({store[store.size() - 2].c_str(), store[store.size() - 1].c_str()});
     }
 
+    std::string schema;  // kept alive across the submit call
     mlxforge_sampling s = (info.Length() >= 2 && info[1].IsObject())
-                              ? parse_sampling(info[1].As<Napi::Object>())
+                              ? parse_sampling(info[1].As<Napi::Object>(), schema)
                               : mlxforge_sampling{};
+    if (!schema.empty()) s.json_schema = schema.c_str();
     char* err = nullptr;
     mlxforge_request* req = mlxforge_submit_chat(eng_, msgs.data(), msgs.size(), &s, &err);
     return finish_submit(env, req, err);
@@ -246,9 +254,11 @@ class EngineWrap : public Napi::ObjectWrap<EngineWrap> {
     if (info.Length() < 1 || !info[0].IsString())
       throw Napi::TypeError::New(env, "submitText(prompt, sampling?)");
     std::string prompt = info[0].As<Napi::String>().Utf8Value();
+    std::string schema;  // kept alive across the submit call
     mlxforge_sampling s = (info.Length() >= 2 && info[1].IsObject())
-                              ? parse_sampling(info[1].As<Napi::Object>())
+                              ? parse_sampling(info[1].As<Napi::Object>(), schema)
                               : mlxforge_sampling{};
+    if (!schema.empty()) s.json_schema = schema.c_str();
     char* err = nullptr;
     mlxforge_request* req = mlxforge_submit_text(eng_, prompt.c_str(), &s, &err);
     return finish_submit(env, req, err);

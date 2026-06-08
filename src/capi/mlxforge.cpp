@@ -141,6 +141,8 @@ mlxforge_request* submit_ids(mlxforge_engine* engine, std::vector<int> prompt_id
   req->params = to_params(sampling);
   req->max_tokens = sampling_max_tokens(sampling);
   req->eos_ids = engine->engine->config().eos_token_ids;
+  if (sampling && sampling->json_schema && *sampling->json_schema)
+    req->json_schema = sampling->json_schema;
 
   if (!engine->engine->scheduler().submit(req)) {
     set_err(err, "request rejected: waiting queue is full");

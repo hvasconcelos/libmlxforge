@@ -53,6 +53,7 @@ add_library(mlxforge_core STATIC
   src/cache/batch_kv_cache.cpp
   src/cache/kv_budget.cpp
   src/sample/sampler.cpp
+  src/sample/json_grammar.cpp
   src/runtime/single_stream.cpp
   src/runtime/engine.cpp
   src/scheduler/scheduler.cpp

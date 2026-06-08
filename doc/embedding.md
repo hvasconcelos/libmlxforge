@@ -5,10 +5,10 @@ occupies a niche nothing else in the MLX ecosystem does, and how you will embed 
 
 > **Status.** Real today: the engine, the **C ABI** (`src/capi/mlxforge.h` →
 > `libmlxforge`, gated by `tests/capi`), the **Node** binding (`bindings/node`,
-> `@mlxforge/node`), and the **Swift** package (`bindings/swift`, `MLXForge`) — the
-> C-ABI, Node, and Swift examples below all compile and run. Still active work
-> (marked **design target** where shown): JSON-schema-constrained structured output
-> and embeddings, which are new engine features rather than binding work.
+> `@mlxforge/node`), the **Swift** package (`bindings/swift`, `MLXForge`), and
+> **JSON-constrained structured output** (`json_schema` sampling option) — every
+> example below compiles and runs. Still active work (marked **design target**):
+> embeddings, a new encoder model family rather than binding work.
 
 ## The product is the library
 
@@ -153,22 +153,58 @@ async let b = engine.complete([.init(role: "user", content: "Name a fruit.")])
 print(try await a, try await b)   // one batched engine
 ```
 
-Remaining surface, in order: JSON-schema / structured output (new constrained decoding
-in `sample/sampler`) → embeddings (new encoder model family). Until those land they are
-documented as gaps rather than implied — see the roadmap.
+## Structured output (constrained decoding)
+
+Pass a `json_schema` sampling option and the engine masks each decode step so the
+output can only be **well-formed JSON** — the guarantee holds regardless of model size,
+because invalid tokens are removed before sampling. Two forms:
+
+- `"json"` — any valid JSON value (OpenAI's `response_format: json_object`).
+- a JSON-Schema string — supported subset: a **top-level object** with ordered,
+  **required**, scalar-typed properties (`string` / `number` / `integer` / `boolean`).
+  Keys are forced in schema order; `integer` forbids a decimal point. Nested-object and
+  array property schemas fall back to a free JSON value. (Generation uses a compact
+  mode — no inter-token whitespace — so greedy decoding cannot stall.)
+
+```js
+// Node: force the shape { city: string, population: integer }
+const schema = JSON.stringify({
+  type: "object",
+  properties: { city: { type: "string" }, population: { type: "integer" } },
+});
+const out = await engine.complete([{ role: "user", content: "Tell me about Paris." }],
+                                  { jsonSchema: schema, maxTokens: 128 });
+JSON.parse(out); // always succeeds -> { city: "Paris", population: 2 }
+```
+
+```swift
+var s = Sampling.greedy
+s.jsonSchema = #"{"type":"object","properties":{"city":{"type":"string"}}}"#
+let out = try await engine.complete([.init(role: "user", content: "Tell me about Paris.")],
+                                    sampling: s)
+```
+
+The grammar engine is `src/sample/json_grammar.{h,cpp}` (pure, unit-tested in
+`tests/sample/json_grammar_test.cpp`); the worker masks logits per row in
+`runtime/worker`. It is opt-in and costs a per-step host-side vocab scan, so leave it
+off for unconstrained generation.
+
+## Remaining: embeddings (design target)
+
+Embeddings (a new BERT/BGE-style encoder model family + an `mlxforge_embed` entry point)
+are the next increment, documented as a gap rather than implied — see the roadmap.
 
 ## What is real today vs. design target
 
 - **Real now:** the batched engine (`runtime/engine`, `scheduler/`, `cache/`), the
   tokenizer + chat templates, GGUF + safetensors loading, greedy / temperature / top-k /
-  top-p sampling, tool/function-calling plumbing, the golden-reference gate, the C ABI
-  (`src/capi/mlxforge.h` → `libmlxforge`, validated by `tests/capi`), **and the Node and
-  Swift bindings** (`bindings/node`, `bindings/swift`). Every example above compiles and
+  top-p sampling, **JSON-constrained structured output** (`json_grammar` + per-row logit
+  masking), tool/function-calling plumbing, the golden-reference gate, the C ABI
+  (`src/capi/mlxforge.h` → `libmlxforge`, validated by `tests/capi`), and the Node and
+  Swift bindings (`bindings/node`, `bindings/swift`). Every example above compiles and
   runs today.
-- **Design target (in progress):** JSON-schema-constrained decoding (new work in
-  `sample/sampler`) and an embeddings path (a new encoder model family). These are
-  net-new engine features, not binding work, and are documented as gaps until they land
-  and are golden-gated.
+- **Design target (in progress):** an embeddings path (a new encoder model family +
+  `mlxforge_embed`). Net-new engine work, documented as a gap until it lands golden-gated.
 
 ## See also
 

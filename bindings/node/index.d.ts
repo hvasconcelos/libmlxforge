@@ -24,6 +24,14 @@ export interface SamplingOptions {
   seed?: number;
   /** Max new tokens (default 64). */
   maxTokens?: number;
+  /**
+   * Constrained decoding. "json" forces any valid JSON value; otherwise a
+   * JSON-Schema string (supported subset: a top-level object with ordered,
+   * required, scalar-typed properties). Output is masked to be well-formed JSON.
+   */
+  jsonSchema?: string;
+  /** Alias for `jsonSchema` (e.g. "json"). */
+  responseFormat?: string;
 }
 
 export interface ChatMessage {

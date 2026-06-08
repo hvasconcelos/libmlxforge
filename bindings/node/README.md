@@ -56,8 +56,24 @@ engine.dispose();
   request). For many simultaneous streams raise it, e.g. `UV_THREADPOOL_SIZE=16`.
 - Keep the `Engine` alive while requests are streaming; `dispose()` after.
 
+### Structured output
+
+Pass `jsonSchema` to force valid JSON (the output is masked so it can only be
+well-formed). `"json"` allows any JSON value; a JSON-Schema string constrains a
+top-level object with ordered, required, scalar-typed properties:
+
+```js
+const schema = JSON.stringify({
+  type: "object",
+  properties: { city: { type: "string" }, population: { type: "integer" } },
+});
+const out = await engine.complete([{ role: "user", content: "Tell me about Paris." }],
+                                  { jsonSchema: schema });
+JSON.parse(out); // always valid
+```
+
 ## Status
 
-Core streaming + batched concurrency are implemented. Structured output
-(JSON-schema constrained decoding) and embeddings are on the roadmap (they are
-new engine features, not just binding work).
+Streaming, batched concurrency, and JSON-constrained structured output are
+implemented. Embeddings are on the roadmap (a new encoder model family, not just
+binding work).

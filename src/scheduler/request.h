@@ -7,11 +7,13 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
 #include <vector>
 
+#include "sample/json_grammar.h"
 #include "sample/sampler.h"
 
 namespace mlxforge {
@@ -67,6 +69,13 @@ struct Request {
   SamplingParams params;
   int max_tokens = 64;
   std::vector<int> eos_ids;
+
+  // Constrained decoding: empty = unconstrained; "json" = any valid JSON value;
+  // otherwise a JSON-Schema string (the supported subset, see json_grammar.h).
+  // The worker compiles this into `grammar` on admit and masks logits so the
+  // output can only be valid JSON.
+  std::string json_schema;
+  std::unique_ptr<JsonGrammar> grammar;  // runtime grammar state (worker-owned)
 
   // Set by the submitting thread (e.g. client disconnect); read by the worker.
   std::atomic<bool> cancelled{false};

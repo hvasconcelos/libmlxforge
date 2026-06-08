@@ -19,15 +19,22 @@ public struct Sampling {
   public var presencePenalty: Float = 0
   public var seed: UInt64 = 0
   public var maxTokens: Int32 = 0
+  /// Constrained decoding. "json" forces any valid JSON value; otherwise a
+  /// JSON-Schema string (supported subset: a top-level object with ordered,
+  /// required, scalar-typed properties). Output is masked to be well-formed JSON.
+  public var jsonSchema: String? = nil
 
   public init() {}
   public static var greedy: Sampling { Sampling() }
 
+  // The flat C struct, with json_schema left null; the submit path fills it in
+  // (it must own the C string for the duration of the call).
   fileprivate var c: mlxforge_sampling {
     mlxforge_sampling(
       temperature: temperature, top_k: topK, top_p: topP, min_p: minP,
       repetition_penalty: repetitionPenalty, frequency_penalty: frequencyPenalty,
-      presence_penalty: presencePenalty, seed: seed, max_tokens: maxTokens)
+      presence_penalty: presencePenalty, seed: seed, max_tokens: maxTokens,
+      json_schema: nil)
   }
 }
 
@@ -85,6 +92,9 @@ public final class Engine {
     -> AsyncThrowingStream<String, Error>
   {
     var s = sampling.c
+    let schemaC = sampling.jsonSchema.map { strdup($0) } ?? nil
+    if let p = schemaC { s.json_schema = UnsafePointer(p) }
+    defer { if let p = schemaC { free(p) } }
     var err: UnsafeMutablePointer<CChar>?
     guard let req = mlxforge_submit_text(handle, prompt, &s, &err) else {
       let message = err.map { String(cString: $0) } ?? "submit failed"
@@ -117,6 +127,11 @@ public final class Engine {
       msgs.append(mlxforge_msg(role: role, content: content))
     }
     var s = sampling.c
+    if let js = sampling.jsonSchema {
+      let p = strdup(js)!
+      owned.append(p)  // freed with the message strings in the defer above
+      s.json_schema = UnsafePointer(p)
+    }
     var err: UnsafeMutablePointer<CChar>?
     let req = msgs.withUnsafeBufferPointer { buf in
       mlxforge_submit_chat(handle, buf.baseAddress, buf.count, &s, &err)

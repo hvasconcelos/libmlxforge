@@ -19,6 +19,7 @@ add_executable(mlxforge_tests
   cache/batch_kv_filter_merge_test.cpp
   cache/kv_budget_test.cpp
   sample/sampler_test.cpp
+  sample/json_grammar_test.cpp
   runtime/single_stream_test.cpp
   runtime/engine_test.cpp
   scheduler/scheduler_test.cpp
