@@ -61,6 +61,7 @@ add_library(mlxforge_core STATIC
   src/model/qwen3_5.cpp
   src/model/vision/vit.cpp
   src/model/qwen3_vl.cpp
+  src/vision/preprocess.cpp
   src/model/model_factory.cpp
   src/cache/kv_cache.cpp
   src/cache/batch_kv_cache.cpp
