@@ -7,6 +7,7 @@
 // NULL / negative returns plus an allocated message in `*err`.
 #include "capi/mlxforge.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -42,13 +43,22 @@ mlxforge::SamplingParams to_params(const mlxforge_sampling* s) {
     p.temperature = 0.0f;  // null sampling => deterministic greedy
     return p;
   }
-  p.temperature = s->temperature;
-  p.top_k = s->top_k > 0 ? s->top_k : 0;
+  // Sanitize every field so no hostile/garbage value reaches the sampler graph:
+  // a non-finite (NaN/Inf) value would propagate through the math (a NaN
+  // temperature divides the logits to all-NaN), and out-of-range knobs are
+  // treated as their "disabled" sentinel. The comparisons below double as
+  // non-finite guards: any comparison with NaN is false, so NaN falls through to
+  // the safe default; std::isfinite handles the temperature, which is a divisor.
+  p.temperature = std::isfinite(s->temperature) ? s->temperature : 0.0f;  // non-finite => greedy
+  p.top_k = s->top_k > 0 ? s->top_k : 0;  // the sampler further clamps to vocab
   p.top_p = (s->top_p > 0.0f && s->top_p < 1.0f) ? s->top_p : 1.0f;
-  p.min_p = s->min_p > 0.0f ? s->min_p : 0.0f;
-  p.repetition_penalty = s->repetition_penalty > 0.0f ? s->repetition_penalty : 1.0f;
-  p.frequency_penalty = s->frequency_penalty;
-  p.presence_penalty = s->presence_penalty;
+  p.min_p = (s->min_p > 0.0f && s->min_p <= 1.0f) ? s->min_p : 0.0f;  // a probability in (0,1]
+  p.repetition_penalty =
+      (std::isfinite(s->repetition_penalty) && s->repetition_penalty > 0.0f)
+          ? s->repetition_penalty
+          : 1.0f;
+  p.frequency_penalty = std::isfinite(s->frequency_penalty) ? s->frequency_penalty : 0.0f;
+  p.presence_penalty = std::isfinite(s->presence_penalty) ? s->presence_penalty : 0.0f;
   p.seed = s->seed;
   return p;
 }

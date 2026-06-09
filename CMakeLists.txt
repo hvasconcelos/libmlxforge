@@ -30,6 +30,17 @@ option(MLXFORGE_BUILD_SERVER "Build the OpenAI HTTP server harness" ON)
 option(MLXFORGE_BUILD_CLI "Build the CLI harness" ON)
 option(MLXFORGE_BUILD_SHARED "Build the libmlxforge shared library (the product)" ON)
 option(MLXFORGE_ENABLE_HF_DOWNLOAD "Enable HuggingFace model download via libcurl" ON)
+# ASan + UBSan for the engine core and test binary, to back the fuzz/endurance
+# suite with crash/use-after-free/double-free/UB detection. LeakSanitizer is NOT
+# available on Apple Silicon, so leaks are quantified by the RSS-growth assertions
+# in tests/capi/capi_endurance_test.cpp instead. Off by default (it slows builds
+# and is not wanted in the released artifact); turn on for a hardening run:
+#   cmake -S . -B build-asan -DMLXFORGE_ENABLE_SANITIZERS=ON
+option(MLXFORGE_ENABLE_SANITIZERS "Build core + tests with AddressSanitizer + UBSan" OFF)
+if(MLXFORGE_ENABLE_SANITIZERS)
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
 
 # --- Engine core (the library; lean — no HTTP) -------------------------------
 # Static library holding the engine modules (core/, model/, cache/, sample/,
