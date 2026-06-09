@@ -35,6 +35,12 @@ class Tokenizer {
     // `{"name": ..., "parameters": {...}}` replayed verbatim into the prompt.
     // Empty for ordinary messages. Llama-3.2 emits a single call per turn.
     std::string tool_call;
+    // Multimodal (Qwen3-VL): one entry per image attached to this turn, giving
+    // the number of <|image_pad|> placeholder tokens for that image (= product of
+    // its patch grid / merge_size^2, known after preprocessing). Each renders as a
+    // <|vision_start|> … <|vision_end|> block before the text content. Empty for
+    // text-only turns / models.
+    std::vector<int> image_token_counts;
   };
 
   // Load from a tokenizer.json file. `bos_id` is prepended on encode (the Rust

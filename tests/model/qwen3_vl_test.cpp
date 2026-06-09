@@ -14,6 +14,7 @@
 #include "core/weights.h"
 #include "model/model_factory.h"
 #include "model/qwen3_vl.h"
+#include "tokenizer/tokenizer.h"
 #include "vision/preprocess.h"
 #include "support/model_fixture.h"
 #include "support/reference.h"
@@ -155,4 +156,21 @@ TEST_CASE("Qwen3-VL: end-to-end from RGB pixels to next-token argmax") {
 
   std::vector<int> got = {static_cast<int>(mx::argmax(last, -1).item<int>())};
   assert_tokens_equal(got, load_qwen3_vl_token_ids("argmax.npy"));
+}
+
+TEST_CASE("Qwen3-VL: chat template with an image matches the reference input_ids") {
+  if (!qwen3_vl_model_available()) {
+    MESSAGE("Qwen3-VL model not found in HF cache; skipping chat-template test");
+    return;
+  }
+  // ChatML with one image whose grid (1,4,4) collapses to 4 <|image_pad|> tokens.
+  Tokenizer tok = Tokenizer::from_file(qwen3_vl_model_dir() + "/tokenizer.json", /*bos_id=*/-1,
+                                       ChatFormat::Qwen3);
+  Tokenizer::Message m;
+  m.role = "user";
+  m.content = "What is in this image?";
+  m.image_token_counts = {4};
+
+  std::vector<int> ids = tok.apply_chat_template({m}, /*add_generation_prompt=*/true);
+  assert_tokens_equal(ids, load_qwen3_vl_token_ids("input_ids.npy"));
 }
