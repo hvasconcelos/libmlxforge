@@ -14,7 +14,9 @@
 #include "mlx/array.h"
 
 #include "model/qwen3_vl.h"
+#include "model/vision/vit.h"
 #include "runtime/single_stream.h"  // GenerateResult
+#include "tokenizer/tokenizer.h"
 
 namespace mlxforge {
 
@@ -30,5 +32,15 @@ GenerateResult greedy_generate_multimodal(const Qwen3VLModel& model,
                                           const mx::array& position_ids, int max_tokens,
                                           const std::vector<int>& eos_ids,
                                           const std::function<void(int)>& on_token = {});
+
+// High-level single-image orchestration: preprocess `image_rgb` (decoded H×W×3
+// uint8), encode the ViT, render the ChatML prompt with the right number of
+// image placeholders, build M-RoPE positions, and greedily generate. Ties the
+// whole vision pipeline together behind one call (the CLI's image-to-text core).
+GenerateResult generate_from_image(const Qwen3VLModel& model, const VitEncoder& vit,
+                                   const Tokenizer& tokenizer, const std::string& user_text,
+                                   const mx::array& image_rgb, int max_tokens,
+                                   const std::vector<int>& eos_ids,
+                                   const std::function<void(int)>& on_token = {});
 
 }  // namespace mlxforge

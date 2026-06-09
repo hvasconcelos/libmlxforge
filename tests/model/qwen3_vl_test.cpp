@@ -227,6 +227,21 @@ TEST_CASE("Qwen3-VL: greedy_generate_multimodal runtime path reproduces the gree
   assert_tokens_equal(r.tokens, load_qwen3_vl_token_ids("greedy_tokens.npy"));
 }
 
+TEST_CASE("Qwen3-VL: generate_from_image composes the full pipeline") {
+  if (!qwen3_vl_model_available()) {
+    MESSAGE("Qwen3-VL model not found in HF cache; skipping generate_from_image test");
+    return;
+  }
+  // Everything through real entrypoints: preprocess -> ViT -> chat template (with
+  // the computed image-token count) -> M-RoPE -> generate, from raw RGB + text.
+  Tokenizer tok = Tokenizer::from_file(qwen3_vl_model_dir() + "/tokenizer.json", /*bos_id=*/-1,
+                                       ChatFormat::Qwen3);
+  GenerateResult r = generate_from_image(shared_qwen3_vl_model(), shared_qwen3_vl_vit(), tok,
+                                         "What is in this image?", load_qwen3_vl_npy("image_rgb.npy"),
+                                         /*max_tokens=*/10, /*eos_ids=*/{});
+  assert_tokens_equal(r.tokens, load_qwen3_vl_token_ids("greedy_tokens.npy"));
+}
+
 TEST_CASE("Qwen3-VL: cached KV decode reproduces the greedy tokens") {
   if (!qwen3_vl_model_available()) {
     MESSAGE("Qwen3-VL model not found in HF cache; skipping cached-decode test");

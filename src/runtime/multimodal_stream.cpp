@@ -5,6 +5,7 @@
 
 #include "cache/kv_cache.h"
 #include "sample/sampler.h"
+#include "vision/preprocess.h"
 
 #include "mlx/ops.h"
 #include "mlx/transforms.h"
@@ -64,6 +65,33 @@ GenerateResult greedy_generate_multimodal(const Qwen3VLModel& model,
   result.decode_tokens = std::max<int>(0, static_cast<int>(result.tokens.size()) - 1);
   if (result.decode_tokens > 0) result.decode_ms = ms_since(t_decode_start);
   return result;
+}
+
+GenerateResult generate_from_image(const Qwen3VLModel& model, const VitEncoder& vit,
+                                   const Tokenizer& tokenizer, const std::string& user_text,
+                                   const mx::array& image_rgb, int max_tokens,
+                                   const std::vector<int>& eos_ids,
+                                   const std::function<void(int)>& on_token) {
+  const ModelConfig& cfg = model.config();
+
+  // Preprocess -> ViT encode.
+  Preprocessed pre = patchify_image(image_rgb, PreprocessConfig::from(*cfg.vision));
+  mx::array grid(pre.grid_thw.data(), {1, 3}, mx::int32);
+  VitEncoder::Output v = vit.forward(pre.pixel_values, grid);
+
+  // Prompt: one image whose placeholder count is the collapsed patch count.
+  const int merge = cfg.vision->merge_unit();
+  const int image_tokens = pre.grid_thw[0] * pre.grid_thw[1] * pre.grid_thw[2] / merge;
+  Tokenizer::Message msg;
+  msg.role = "user";
+  msg.content = user_text;
+  msg.image_token_counts = {image_tokens};
+  std::vector<int> ids = tokenizer.apply_chat_template({msg}, /*add_generation_prompt=*/true);
+
+  // M-RoPE positions, then generate.
+  mx::array pos = mrope_position_ids(ids, {pre.grid_thw}, cfg);
+  return greedy_generate_multimodal(model, ids, v.hidden, v.deepstack, pos, max_tokens, eos_ids,
+                                    on_token);
 }
 
 }  // namespace mlxforge
