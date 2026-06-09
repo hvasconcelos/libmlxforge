@@ -78,6 +78,15 @@ class Engine {
     return streamRequest(this._h.submitText(prompt, sampling));
   }
 
+  /**
+   * Stream a vision-language completion: a text `prompt` about one image
+   * (`imageBuffer`, a Buffer/Uint8Array of raw encoded bytes — JPEG/PNG/…). The
+   * loaded model must be a vision-language checkpoint (e.g. Qwen3-VL).
+   */
+  image(prompt, imageBuffer, sampling = {}) {
+    return streamRequest(this._h.submitImage(prompt, imageBuffer, sampling));
+  }
+
   /** Run a chat to completion and return the full string. */
   complete(messages, sampling = {}) {
     return collect(this.chat(messages, sampling));
