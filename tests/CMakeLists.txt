@@ -33,6 +33,7 @@ add_executable(mlxforge_tests
   model/qwen3_moe_test.cpp
   model/qwen3_5_test.cpp
   model/vit_test.cpp
+  model/qwen3_vl_test.cpp
   tokenizer/tokenizer_test.cpp
   tokenizer/bpe_test.cpp
   tokenizer/spm_test.cpp
