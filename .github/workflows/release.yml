@@ -1,0 +1,93 @@
+name: Release
+
+# On a version tag (v*), build the distributable artifacts on an Apple Silicon
+# runner and attach them to the GitHub Release:
+#   - libmlxforge-<tag>-macos-arm64.tar.gz  (lean dylib + mlxforge.h, no httplib/curl)
+#   - MLXForge-<tag>.xcframework.zip         (Swift / binary-target consumption)
+#   - mlxforge-cli-<tag>-macos-arm64.tar.gz  (the CLI harness)
+# These are what the Homebrew formula, the SwiftPM binaryTarget, and the npm
+# prebuilt package reference.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write  # create/upload to the GitHub Release
+
+jobs:
+  release:
+    name: Build & publish artifacts (Apple Silicon)
+    runs-on: macos-15  # ARM64 runner — required for the Metal backend
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}" >> "$GITHUB_OUTPUT"
+
+      - name: Set build parallelism
+        run: echo "CMAKE_BUILD_PARALLEL_LEVEL=$(sysctl -n hw.ncpu)" >> "$GITHUB_ENV"
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Download Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain || echo "Metal Toolchain already present"
+
+      - name: Cache CMake dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ runner.os }}-${{ hashFiles('cmake/Dependencies.cmake', 'CMakeLists.txt') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      # Lean library build: no server harness, no CLI, no libcurl -> a dylib that
+      # carries neither cpp-httplib nor libcurl (verified by check-abi below).
+      - name: Build libmlxforge (lean)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DMLXFORGE_BUILD_SERVER=OFF -DMLXFORGE_BUILD_CLI=OFF \
+            -DMLXFORGE_ENABLE_HF_DOWNLOAD=OFF
+          cmake --build build --target mlxforge_shared
+
+      - name: Verify ABI (no httplib/curl; symbols stable)
+        run: ./scripts/check-abi.sh build/libmlxforge.dylib
+
+      - name: Build the CLI harness
+        run: |
+          cmake -S . -B build-cli -DCMAKE_BUILD_TYPE=Release \
+            -DMLXFORGE_BUILD_SERVER=OFF -DMLXFORGE_BUILD_SHARED=OFF
+          cmake --build build-cli --target mlxforge-cli
+
+      - name: Build the XCFramework
+        run: ./bindings/swift/scripts/make_xcframework.sh
+
+      - name: Package artifacts
+        id: pkg
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          mkdir -p dist staging/include
+          cp src/capi/mlxforge.h staging/include/
+          cp build/libmlxforge*.dylib staging/
+          tar -C staging -czf "dist/libmlxforge-$TAG-macos-arm64.tar.gz" .
+          tar -C build-cli -czf "dist/mlxforge-cli-$TAG-macos-arm64.tar.gz" mlxforge-cli
+          ditto -c -k --sequesterRsrc bindings/swift/MLXForge.xcframework "dist/MLXForge-$TAG.xcframework.zip"
+          echo "Artifacts:" && ls -la dist
+          ( cd dist && shasum -a 256 * > "SHA256SUMS-$TAG.txt" && cat "SHA256SUMS-$TAG.txt" )
+
+      - name: Upload to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: dist/*
+          fail_on_unmatched_files: true
