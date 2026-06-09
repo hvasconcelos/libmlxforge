@@ -15,6 +15,7 @@
 
 #include "mlx/array.h"
 
+#include "cache/kv_cache.h"
 #include "core/config.h"
 #include "core/weights.h"
 #include "model/qwen3.h"
@@ -55,14 +56,25 @@ class Qwen3VLModel : public Qwen3Model {
   // position_ids (3, seq). Exposed for golden gating (llm_q_rope0 / llm_k_rope0).
   RopedQK roped_qk(int i, const mx::array& hidden, const mx::array& position_ids) const;
 
-  // Full multimodal prefill for a single sequence: token ids + merged ViT
-  // features (scattered into the image_pad rows) + DeepStack features + 3D M-RoPE
-  // position ids -> logits (1, seq, vocab). DeepStack feature j is added at the
-  // image rows after decoder layer j.
+  // Full multimodal prefill for a single sequence (no cache): token ids + merged
+  // ViT features (scattered into the image_pad rows) + DeepStack features + 3D
+  // M-RoPE position ids -> logits (1, seq, vocab). DeepStack feature j is added at
+  // the image rows after decoder layer j.
   mx::array forward_multimodal(const std::vector<int>& input_ids,
                                const mx::array& image_features,
                                const std::vector<mx::array>& deepstack,
                                const mx::array& position_ids) const;
+
+  // Same prefill but writing K/V into `cache` for incremental decode. Returns the
+  // prompt logits (1, seq, vocab); after this the cache holds `seq` tokens.
+  mx::array prefill(const std::vector<int>& input_ids, const mx::array& image_features,
+                    const std::vector<mx::array>& deepstack, const mx::array& position_ids,
+                    KVCache& cache) const;
+
+  // One incremental decode step for a generated (text) token at M-RoPE position
+  // `position` (t==h==w): appends to `cache`, returns logits (1, vocab). No image
+  // merge or DeepStack — those live entirely in the prefilled prompt.
+  mx::array decode_step(int token, int position, KVCache& cache) const;
 
  private:
   // cos/sin for interleaved M-RoPE: position_ids (3, seq) -> each (seq, head_dim/2)
@@ -70,9 +82,16 @@ class Qwen3VLModel : public Qwen3Model {
   std::pair<mx::array, mx::array> mrope_cos_sin(const mx::array& position_ids) const;
   // Apply half-split rotation with the M-RoPE cos/sin to x (B, heads, seq, hd).
   mx::array apply_mrope(const mx::array& x, const mx::array& cos, const mx::array& sin) const;
-  // Self-attention for layer `i` with M-RoPE on Q/K (causal SDPA, GQA-native).
-  mx::array mm_attention(int i, const mx::array& x, const mx::array& cos,
-                         const mx::array& sin) const;
+  // Self-attention for layer `i` with M-RoPE on Q/K (GQA-native). With a cache,
+  // appends this step's K/V and attends over the full history (causal for
+  // multi-token prefill, unmasked for a single decode token).
+  mx::array mm_attention(int i, const mx::array& x, const mx::array& cos, const mx::array& sin,
+                         KVCache* cache = nullptr) const;
+  // Shared decoder stack for prefill: embed + image merge, then layers with
+  // M-RoPE and DeepStack injection. `cache` is optional (nullptr = no cache).
+  mx::array run_prefill(const std::vector<int>& input_ids, const mx::array& image_features,
+                        const std::vector<mx::array>& deepstack, const mx::array& position_ids,
+                        KVCache* cache) const;
 
   mx::array inv_freq_;        // (head_dim/2,) float32 inverse frequencies
   mx::array mrope_selector_;  // (head_dim/2,) int32: t/h/w axis per frequency

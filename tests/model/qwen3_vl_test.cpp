@@ -10,6 +10,7 @@
 #include "mlx/ops.h"
 #include "mlx/transforms.h"
 
+#include "cache/kv_cache.h"
 #include "core/config.h"
 #include "core/weights.h"
 #include "model/model_factory.h"
@@ -201,6 +202,40 @@ TEST_CASE("Qwen3-VL: greedy multimodal generation matches the reference") {
     const int nxt = static_cast<int>(mx::argmax(last, -1).item<int>());
     greedy.push_back(nxt);
     ids.push_back(nxt);
+  }
+  assert_tokens_equal(greedy, load_qwen3_vl_token_ids("greedy_tokens.npy"));
+}
+
+TEST_CASE("Qwen3-VL: cached KV decode reproduces the greedy tokens") {
+  if (!qwen3_vl_model_available()) {
+    MESSAGE("Qwen3-VL model not found in HF cache; skipping cached-decode test");
+    return;
+  }
+  // The efficient path: prefill once into a KV cache, then single-token decode
+  // steps at the post-image M-RoPE positions. Must match the full-recompute
+  // greedy stream token-for-token.
+  const Qwen3VLModel& m = shared_qwen3_vl_model();
+  mx::array feats = load_qwen3_vl_npy("vit_out.npy");
+  std::vector<mx::array> deepstack = {load_qwen3_vl_npy("deepstack_0.npy"),
+                                      load_qwen3_vl_npy("deepstack_1.npy"),
+                                      load_qwen3_vl_npy("deepstack_2.npy")};
+  std::vector<int> ids = load_qwen3_vl_token_ids("input_ids.npy");
+  mx::array pos = mrope_position_ids(ids, grid_fixture(), qwen3_vl_config());
+
+  // The first generated token sits one past the prompt's max M-RoPE position.
+  int next_pos = static_cast<int>(mx::max(pos).item<int>()) + 1;
+
+  KVCache cache(qwen3_vl_config().n_layers);
+  mx::array prefill_logits = m.prefill(ids, feats, deepstack, pos, cache);
+  const int seq = static_cast<int>(ids.size()), vocab = prefill_logits.shape()[2];
+  mx::array last = mx::reshape(mx::slice(prefill_logits, {0, seq - 1, 0}, {1, seq, vocab}), {1, vocab});
+
+  int tok = static_cast<int>(mx::argmax(last, -1).item<int>());
+  std::vector<int> greedy = {tok};
+  for (int i = 1; i < 10; ++i) {
+    mx::array logits = m.decode_step(tok, next_pos++, cache);
+    tok = static_cast<int>(mx::argmax(logits, -1).item<int>());
+    greedy.push_back(tok);
   }
   assert_tokens_equal(greedy, load_qwen3_vl_token_ids("greedy_tokens.npy"));
 }

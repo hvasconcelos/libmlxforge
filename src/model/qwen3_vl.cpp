@@ -134,22 +134,30 @@ Qwen3VLModel::RopedQK Qwen3VLModel::roped_qk(int i, const mx::array& hidden,
 }
 
 mx::array Qwen3VLModel::mm_attention(int i, const mx::array& x, const mx::array& cos,
-                                     const mx::array& sin) const {
+                                     const mx::array& sin, KVCache* cache) const {
   const int B = x.shape()[0], L = x.shape()[1];
   QKV p = project_qkv(x, i);
   mx::array q = apply_mrope(p.q, cos, sin);
   mx::array k = apply_mrope(p.k, cos, sin);
+  mx::array v = p.v;
+  if (cache) {  // append this step's K/V, attend over the full history
+    auto kv = cache->update_and_fetch(i, k, v);
+    k = kv.first;
+    v = kv.second;
+  }
   const float scale = 1.0f / std::sqrt(static_cast<float>(config().head_dim));
-  // Multi-token prefill is causal; GQA (32:8 heads) is handled natively by SDPA.
-  mx::array out = mx::fast::scaled_dot_product_attention(q, k, p.v, scale, /*mask_mode=*/"causal");
+  // Multi-token chunks are causal; a single decode token attends all cache. GQA
+  // (32:8 heads) is handled natively by SDPA.
+  const std::string mask_mode = L > 1 ? "causal" : "";
+  mx::array out = mx::fast::scaled_dot_product_attention(q, k, v, scale, mask_mode);
   out = mx::reshape(mx::transpose(out, {0, 2, 1, 3}), {B, L, config().n_heads * config().head_dim});
   return linear(out, layer_key(i, "self_attn.o_proj.weight"));
 }
 
-mx::array Qwen3VLModel::forward_multimodal(const std::vector<int>& input_ids,
-                                           const mx::array& image_features,
-                                           const std::vector<mx::array>& deepstack,
-                                           const mx::array& position_ids) const {
+mx::array Qwen3VLModel::run_prefill(const std::vector<int>& input_ids,
+                                    const mx::array& image_features,
+                                    const std::vector<mx::array>& deepstack,
+                                    const mx::array& position_ids, KVCache* cache) const {
   const int seq = static_cast<int>(input_ids.size());
   const int hidden = config().hidden;
   const int image_tok = config().image_token_id;
@@ -163,7 +171,7 @@ mx::array Qwen3VLModel::forward_multimodal(const std::vector<int>& input_ids,
 
   auto cs = mrope_cos_sin(position_ids);
   for (int i = 0; i < config().n_layers; ++i) {
-    mx::array attended = mx::add(h, mm_attention(i, h, cs.first, cs.second));
+    mx::array attended = mx::add(h, mm_attention(i, h, cs.first, cs.second, cache));
     mx::array post = rms_norm(attended, layer_w(i, "post_attention_layernorm.weight"));
     h = mx::add(attended, feed_forward(post, i));
     // DeepStack: add feature j at the image rows after decoder layer j. Reuse the
@@ -174,10 +182,43 @@ mx::array Qwen3VLModel::forward_multimodal(const std::vector<int>& input_ids,
       h = mx::add(h, mx::reshape(inject, {1, seq, hidden}));
     }
   }
+  if (cache) cache->advance(seq);
   h = rms_norm(h, weights().at("model.norm.weight"));
   const std::string head = weights().has("lm_head.weight") ? "lm_head.weight"
                                                            : "model.embed_tokens.weight";
   return linear(h, head);  // (1, seq, vocab)
+}
+
+mx::array Qwen3VLModel::forward_multimodal(const std::vector<int>& input_ids,
+                                           const mx::array& image_features,
+                                           const std::vector<mx::array>& deepstack,
+                                           const mx::array& position_ids) const {
+  return run_prefill(input_ids, image_features, deepstack, position_ids, /*cache=*/nullptr);
+}
+
+mx::array Qwen3VLModel::prefill(const std::vector<int>& input_ids, const mx::array& image_features,
+                                const std::vector<mx::array>& deepstack,
+                                const mx::array& position_ids, KVCache& cache) const {
+  return run_prefill(input_ids, image_features, deepstack, position_ids, &cache);
+}
+
+mx::array Qwen3VLModel::decode_step(int token, int position, KVCache& cache) const {
+  std::vector<int> t = {token};
+  mx::array h = embed(mx::array(t.data(), {1, 1}, mx::int32));  // (1, 1, hidden)
+
+  // A generated token is text: t==h==w==position, so M-RoPE is ordinary 1D RoPE.
+  std::vector<int> p3 = {position, position, position};
+  auto cs = mrope_cos_sin(mx::array(p3.data(), {3, 1}, mx::int32));
+  for (int i = 0; i < config().n_layers; ++i) {
+    mx::array attended = mx::add(h, mm_attention(i, h, cs.first, cs.second, &cache));
+    mx::array post = rms_norm(attended, layer_w(i, "post_attention_layernorm.weight"));
+    h = mx::add(attended, feed_forward(post, i));
+  }
+  cache.advance(1);
+  h = rms_norm(h, weights().at("model.norm.weight"));
+  const std::string head = weights().has("lm_head.weight") ? "lm_head.weight"
+                                                           : "model.embed_tokens.weight";
+  return mx::reshape(linear(h, head), {1, config().vocab});  // (1, vocab)
 }
 
 }  // namespace mlxforge
