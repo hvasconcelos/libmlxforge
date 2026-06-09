@@ -49,12 +49,19 @@ GenerateResult generate_multimodal(const Qwen3VLModel& model, const VitEncoder& 
                                    const std::function<void(int)>& on_token = {},
                                    const PreprocessConfig* pcfg = nullptr);
 
-// High-level single-image orchestration: smart-resize + preprocess `image_rgb`
-// (decoded H×W×3 uint8), encode the ViT, render the ChatML prompt with the right
-// number of image placeholders, build M-RoPE positions, and greedily generate.
-// Ties the whole vision pipeline together behind one call (the CLI's image-to-
-// text core). `pcfg` overrides the preprocessing config (resize bounds etc.);
-// NULL uses the model's defaults.
+// High-level single-turn orchestration: render a one-user-message ChatML prompt
+// for `user_text` with a placeholder run per image (sized from each image's
+// dimensions), then generate over all `images_rgb` (decoded H×W×3 uint8). Ties
+// the whole vision pipeline together behind one call (the CLI / C-ABI image-to-
+// text core). `pcfg` overrides the preprocessing config; NULL uses the defaults.
+GenerateResult generate_from_images(const Qwen3VLModel& model, const VitEncoder& vit,
+                                    const Tokenizer& tokenizer, const std::string& user_text,
+                                    const std::vector<mx::array>& images_rgb, int max_tokens,
+                                    const std::vector<int>& eos_ids,
+                                    const std::function<void(int)>& on_token = {},
+                                    const PreprocessConfig* pcfg = nullptr);
+
+// Single-image convenience: generate_from_images with one image.
 GenerateResult generate_from_image(const Qwen3VLModel& model, const VitEncoder& vit,
                                    const Tokenizer& tokenizer, const std::string& user_text,
                                    const mx::array& image_rgb, int max_tokens,

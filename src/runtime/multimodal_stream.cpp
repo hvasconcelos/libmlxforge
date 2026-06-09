@@ -123,23 +123,38 @@ GenerateResult generate_multimodal(const Qwen3VLModel& model, const VitEncoder& 
                                     on_token);
 }
 
+GenerateResult generate_from_images(const Qwen3VLModel& model, const VitEncoder& vit,
+                                    const Tokenizer& tokenizer, const std::string& user_text,
+                                    const std::vector<mx::array>& images_rgb, int max_tokens,
+                                    const std::vector<int>& eos_ids,
+                                    const std::function<void(int)>& on_token,
+                                    const PreprocessConfig* pcfg) {
+  // Single-turn convenience: size each placeholder run from its image's
+  // dimensions (CPU math), render a one-user-message prompt with that many image
+  // blocks, then generate. The full chat history is handled by the caller building
+  // prompt_ids directly for generate_multimodal (the server path).
+  PreprocessConfig pc = pcfg ? *pcfg : PreprocessConfig::from(*model.config().vision);
+  std::vector<int> counts;
+  counts.reserve(images_rgb.size());
+  for (const auto& rgb : images_rgb)
+    counts.push_back(image_token_count(rgb.shape()[0], rgb.shape()[1], pc));
+
+  Tokenizer::Message msg;
+  msg.role = "user";
+  msg.content = user_text;
+  msg.image_token_counts = counts;
+  std::vector<int> ids = tokenizer.apply_chat_template({msg}, /*add_generation_prompt=*/true);
+  return generate_multimodal(model, vit, ids, images_rgb, max_tokens, eos_ids, on_token, &pc);
+}
+
 GenerateResult generate_from_image(const Qwen3VLModel& model, const VitEncoder& vit,
                                    const Tokenizer& tokenizer, const std::string& user_text,
                                    const mx::array& image_rgb, int max_tokens,
                                    const std::vector<int>& eos_ids,
                                    const std::function<void(int)>& on_token,
                                    const PreprocessConfig* pcfg) {
-  // Single-turn convenience: size the placeholder run from the image dimensions
-  // (CPU math), render a one-user-message prompt, then generate. The full chat
-  // history is handled by the caller building prompt_ids for generate_multimodal.
-  PreprocessConfig pc = pcfg ? *pcfg : PreprocessConfig::from(*model.config().vision);
-  const int n = image_token_count(image_rgb.shape()[0], image_rgb.shape()[1], pc);
-  Tokenizer::Message msg;
-  msg.role = "user";
-  msg.content = user_text;
-  msg.image_token_counts = {n};
-  std::vector<int> ids = tokenizer.apply_chat_template({msg}, /*add_generation_prompt=*/true);
-  return generate_multimodal(model, vit, ids, {image_rgb}, max_tokens, eos_ids, on_token, &pc);
+  return generate_from_images(model, vit, tokenizer, user_text, {image_rgb}, max_tokens, eos_ids,
+                              on_token, pcfg);
 }
 
 }  // namespace mlxforge

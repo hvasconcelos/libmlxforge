@@ -95,8 +95,8 @@ void Worker::handle_multimodal(Request& req) {
                               on_token);
     } else {
       if (tok_ == nullptr) throw std::runtime_error("multimodal text prompt needs a tokenizer");
-      r = generate_from_image(*vl, *vit_, *tok_, req.mm_text, images.front(), req.max_tokens,
-                              req.eos_ids, on_token);
+      r = generate_from_images(*vl, *vit_, *tok_, req.mm_text, images, req.max_tokens, req.eos_ids,
+                               on_token);
     }
     req.finish_reason = r.hit_eos ? "stop" : "length";
   } catch (const std::exception& e) {
