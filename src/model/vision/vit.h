@@ -15,6 +15,8 @@
 //   forward      -> vit_out, deepstack_{0,1,2}
 #pragma once
 
+#include <vector>
+
 #include "mlx/array.h"
 
 #include "core/config.h"
@@ -31,6 +33,17 @@ class VitEncoder {
   VitEncoder(VisionConfig cfg, const Weights& weights);
 
   const VisionConfig& config() const { return cfg_; }
+
+  // Encoder output: the merged patch features the language model attends over,
+  // plus the per-layer DeepStack features injected into its first decoder layers.
+  struct Output {
+    mx::array hidden;                  // (merged_tokens, out_hidden)
+    std::vector<mx::array> deepstack;  // one per deepstack index: (merged_tokens, out_hidden)
+  };
+
+  // Full ViT forward: pixel_values (num_patches, patch_flat) + grid_thw ->
+  // merged features + DeepStack features. Gated against vit_out / deepstack_{i}.
+  Output forward(const mx::array& pixel_values, const mx::array& grid_thw) const;
 
   // Conv3d patch embedding as a matmul: pixel_values (num_patches, in_ch *
   // temporal_patch * patch * patch) -> (num_patches, vit_hidden). The conv kernel
@@ -64,6 +77,11 @@ class VitEncoder {
   mx::array attention(const mx::array& x, int i, const mx::array& freqs) const;
   // gelu-tanh MLP: linear_fc2(gelu_tanh(linear_fc1(x))).
   mx::array vision_mlp(const mx::array& x, int i) const;
+  // Patch merger: groups spatial_merge_size^2 consecutive patches into one token
+  // and projects to out_hidden, with exact-GELU. `postshuffle` selects whether
+  // the LayerNorm runs after the group reshape (DeepStack mergers) or before it
+  // (the final merger).
+  mx::array merger(const mx::array& x, const std::string& prefix, bool postshuffle) const;
   // Weight-key prefix for block `i`, e.g. "visual.blocks.3".
   std::string block_key(int i) const;
 

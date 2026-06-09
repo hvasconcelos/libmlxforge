@@ -1,5 +1,6 @@
 #include "model/vision/vit.h"
 
+#include <algorithm>
 #include <cmath>
 #include <tuple>
 #include <vector>
@@ -162,6 +163,14 @@ mx::array gelu_tanh(const mx::array& x) {
   return mx::multiply(mx::multiply(mx::array(0.5f), x), mx::add(mx::array(1.0f), mx::tanh(inner)));
 }
 
+// Exact GELU (nn.GELU()), the patch-merger activation: x * 0.5 * (1 + erf(x/sqrt2)).
+mx::array gelu_exact(const mx::array& x) {
+  return mx::multiply(
+      x, mx::multiply(mx::array(0.5f),
+                      mx::add(mx::array(1.0f),
+                              mx::erf(mx::divide(x, mx::array(1.4142135623730951f))))));
+}
+
 // NeoX-style half rotation: concat(-x[..., d/2:], x[..., :d/2]).
 mx::array rotate_half(const mx::array& x) {
   const int d = x.shape().back();
@@ -216,6 +225,43 @@ mx::array VitEncoder::vision_mlp(const mx::array& x, int i) const {
 mx::array VitEncoder::block(const mx::array& x, int i, const mx::array& freqs) const {
   mx::array h = mx::add(x, attention(layer_norm(x, block_key(i) + ".norm1"), i, freqs));
   return mx::add(h, vision_mlp(layer_norm(h, block_key(i) + ".norm2"), i));
+}
+
+mx::array VitEncoder::merger(const mx::array& x, const std::string& prefix,
+                            bool postshuffle) const {
+  // Group spatial_merge_size^2 consecutive patches (block order) into one token.
+  const int merged = cfg_.hidden * cfg_.merge_unit();
+  mx::array h = x;
+  if (postshuffle) {
+    // DeepStack mergers: reshape first, then LayerNorm over the merged width.
+    h = layer_norm(mx::reshape(h, {-1, merged}), prefix + ".norm");
+  } else {
+    // Final merger: LayerNorm over the patch width, then reshape.
+    h = mx::reshape(layer_norm(h, prefix + ".norm"), {-1, merged});
+  }
+  h = gelu_exact(linear(h, prefix + ".linear_fc1"));
+  return linear(h, prefix + ".linear_fc2");
+}
+
+VitEncoder::Output VitEncoder::forward(const mx::array& pixel_values,
+                                       const mx::array& grid_thw) const {
+  const mx::array freqs = rope_2d_freqs(grid_thw);
+  mx::array h = mx::add(patch_embed(pixel_values), pos_embed(grid_thw));
+
+  const auto& ds_idx = cfg_.deepstack_visual_indexes;
+  std::vector<mx::array> deepstack;
+  for (int i = 0; i < cfg_.depth; ++i) {
+    h = block(h, i, freqs);
+    // After the configured ViT layers, the running hidden state feeds a dedicated
+    // DeepStack merger; the result is injected into the LLM's first decoder layers.
+    auto it = std::find(ds_idx.begin(), ds_idx.end(), i);
+    if (it != ds_idx.end()) {
+      const int di = static_cast<int>(it - ds_idx.begin());
+      deepstack.push_back(
+          merger(h, "visual.deepstack_merger_list." + std::to_string(di), /*postshuffle=*/true));
+    }
+  }
+  return {merger(h, "visual.merger", /*postshuffle=*/false), std::move(deepstack)};
 }
 
 }  // namespace mlxforge

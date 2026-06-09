@@ -61,3 +61,26 @@ TEST_CASE("Qwen3-VL ViT: block 0 (attention + MLP) matches the reference") {
   mx::eval(out);
   assert_close(out, load_qwen3_vl_npy("vit_block0.npy"));
 }
+
+TEST_CASE("Qwen3-VL ViT: full forward (merged features + DeepStack) matches the reference") {
+  if (!qwen3_vl_model_available()) {
+    MESSAGE("Qwen3-VL model not found in HF cache; skipping ViT forward test");
+    return;
+  }
+  const VitEncoder& vit = shared_qwen3_vl_vit();
+  VitEncoder::Output out =
+      vit.forward(load_qwen3_vl_npy("pixel_values.npy"), load_qwen3_vl_npy("image_grid_thw.npy"));
+  mx::eval(out.hidden);
+  for (auto& d : out.deepstack) mx::eval(d);
+
+  // The full 24-block stack accumulates more fp16 rounding than the single-stage
+  // gates above (which hold at 1e-2), so a few elements drift just past the tight
+  // tolerance; loosen to 2.5e-2. The DeepStack features tap earlier layers
+  // (5/11/17), so less accumulation — they stay tighter.
+  assert_close(out.hidden, load_qwen3_vl_npy("vit_out.npy"), /*rtol=*/2.5e-2f, /*atol=*/2.5e-2f);
+  REQUIRE(out.deepstack.size() == 3);
+  for (int i = 0; i < 3; ++i) {
+    assert_close(out.deepstack[i], load_qwen3_vl_npy("deepstack_" + std::to_string(i) + ".npy"),
+                 /*rtol=*/2e-2f, /*atol=*/2e-2f);
+  }
+}
