@@ -6,11 +6,14 @@ Guidance for working in this repo with Claude Code.
 
 `mlxforge` — a from-scratch Local Inference engine in **C++ on Apple MLX** (the C++
 core library, not `mlx-lm`), with **continuous batching**. Apple Silicon only (Metal
-backend). C++17.
+backend). C++17. Runs LLaMA-family decoder models (Llama-3.2, Qwen3 dense/MoE,
+Qwen3.5 hybrid) and **Qwen3-VL** vision-language (image → text: a from-scratch ViT
+encoder + image merge + interleaved M-RoPE + DeepStack, served single-stream).
 
 The defining constraint: the failure mode is **silent numerical garbage, not a
 crash**. Anything touching the forward pass, KV cache, or sampling must be
-validated against the `mlx-lm` golden reference, not eyeballed.
+validated against the `mlx-lm` (or `mlx-vlm`, for Qwen3-VL) golden reference, not
+eyeballed.
 
 **The product is `libmlxforge` — the engine as an embeddable library.** mlxforge is
 the only MLX project that is a *complete, batched* LLM engine (scheduler + continuous
@@ -146,15 +149,30 @@ reference/.venv/bin/python reference/dump_ref.py
   math.
 - **Decode-with-cache vs full-recompute logits differ by fp16 accumulation
   order** — compare argmax / exact tokens, not raw logits at tight tolerance.
+- **Qwen3-VL interleaved M-RoPE can't use `fast::rope`** (it takes a 1D offset,
+  not 3D `(t,h,w)` positions). `Qwen3VLModel` hand-rolls a half-split rotation
+  with a per-frequency t/h/w selector; text tokens have `t==h==w` so it reduces to
+  ordinary 1D RoPE (and a generated/decode token is a scalar position one past the
+  prompt's max — it jumps over the image's spatial extent). Vision is served
+  **single-stream** (`runtime/multimodal_stream`); the continuous-batching worker
+  is still text-only (`BatchKVCache` can't yet carry per-row 3D positions). Every
+  vision stage is golden-gated against `mlx-vlm` (`reference/fixtures_qwen3_vl/`).
 
 ## Where things live
 
-`src/{core,model,cache,sample,scheduler,runtime,server,tokenizer}`, apps in
-`apps/` (`mlxforge` server, `mlxforge-cli`), tests mirror the module path under `tests/`,
-shared test helpers in `tests/support/`. See the module table in `README.md` and
-`doc/architecture.md` for the per-module responsibilities.
+`src/{core,model,cache,sample,scheduler,runtime,server,tokenizer,capi,vision}`, apps
+in `apps/` (`mlxforge` server, `mlxforge-cli`), tests mirror the module path under
+`tests/`, shared test helpers in `tests/support/`. See the module table in
+`README.md` and `doc/architecture.md` for the per-module responsibilities.
 
-**Planned (product-facing):** `src/capi/` holds the stable `extern "C"` ABI
-(`mlxforge.h`) that wraps `runtime/engine` — the public surface — and `bindings/`
-holds the language bindings on top of it (`bindings/node` first). When these land they
-become the primary entry points; `src/server` and `apps/` remain harnesses behind them.
+**Vision (Qwen3-VL):** `src/model/vision/vit.{h,cpp}` is the ViT encoder;
+`src/model/qwen3_vl.{h,cpp}` is the fused model (image merge + interleaved M-RoPE +
+DeepStack + cached decode); `src/vision/` does image decode (`stb_image`) +
+preprocess (smart-resize/normalize/patchify); `runtime/multimodal_stream.{h,cpp}` is
+the single-stream image→text path. Selected by `create_model` on a `vision_config`.
+
+**Product-facing surface:** `src/capi/` is the stable `extern "C"` ABI
+(`mlxforge.h`) wrapping `runtime/engine` — the public surface — and `bindings/`
+holds the language bindings on top of it (`bindings/{node,swift,rust}`). These are
+the primary entry points; `src/server` and `apps/` are harnesses behind them. The
+ABI is append-only and guarded (`cmake/abi-baseline.txt`, `scripts/check-abi.sh`).

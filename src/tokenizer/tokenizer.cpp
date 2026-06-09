@@ -18,7 +18,10 @@ namespace mlxforge {
 // ChatML template, everything else falls back to Llama-3.2.
 ChatFormat chat_format_from_model_type(const std::string& model_type) {
   if (model_type == "qwen3_5") return ChatFormat::Qwen35;
-  if (model_type == "qwen3" || model_type == "qwen3_moe" || model_type == "qwen2")
+  // Qwen3-VL is ChatML like Qwen3; image content is rendered from the message's
+  // per-image placeholder counts (render_qwen3), so it needs no separate format.
+  if (model_type == "qwen3" || model_type == "qwen3_moe" || model_type == "qwen2" ||
+      model_type == "qwen3_vl")
     return ChatFormat::Qwen3;
   return ChatFormat::Llama3;
 }
@@ -234,6 +237,20 @@ std::string render_llama3(const std::vector<Tokenizer::Message>& messages,
 // Qwen3's tokenizer_config.json chat_template for the system/user/assistant/tool
 // cases (historical assistant <think> stripping is not reproduced — prompts for
 // fresh generation, the common case, match byte-for-byte; see the golden test).
+// Qwen3-VL vision blocks for a turn: one <|vision_start|> <|image_pad|>×N
+// <|vision_end|> per attached image, rendered before the text content. Empty for
+// text-only turns. The special tokens encode to their own ids via the BPE
+// pre-tokenizer's special-token split.
+std::string vision_blocks(const Tokenizer::Message& m) {
+  std::string s;
+  for (int count : m.image_token_counts) {
+    s += "<|vision_start|>";
+    for (int k = 0; k < count; ++k) s += "<|image_pad|>";
+    s += "<|vision_end|>";
+  }
+  return s;
+}
+
 std::string render_qwen3(const std::vector<Tokenizer::Message>& messages,
                          bool add_generation_prompt, bool enable_thinking,
                          const std::vector<std::string>& tools, bool open_think) {
@@ -272,7 +289,7 @@ std::string render_qwen3(const std::vector<Tokenizer::Message>& messages,
       os << "<|im_end|>\n";
       continue;
     }
-    os << "<|im_start|>" << m.role << "\n" << m.content << "<|im_end|>\n";
+    os << "<|im_start|>" << m.role << "\n" << vision_blocks(m) << m.content << "<|im_end|>\n";
   }
 
   if (add_generation_prompt) {

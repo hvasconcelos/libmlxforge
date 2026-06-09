@@ -98,6 +98,14 @@ extern "C" {
         sampling: *const CSampling,
         err: *mut *mut c_char,
     ) -> *mut mlxforge_request;
+    fn mlxforge_submit_image(
+        e: *mut mlxforge_engine,
+        prompt: *const c_char,
+        image_data: *const u8,
+        image_len: usize,
+        sampling: *const CSampling,
+        err: *mut *mut c_char,
+    ) -> *mut mlxforge_request;
     fn mlxforge_request_next(r: *mut mlxforge_request, text: *mut *mut c_char) -> c_int;
     fn mlxforge_request_finish_reason(r: *mut mlxforge_request) -> *const c_char;
     fn mlxforge_request_free(r: *mut mlxforge_request);
@@ -253,6 +261,30 @@ impl Engine {
         let cs = Self::c_sampling(sampling, &mut schema_keep);
         let mut err: *mut c_char = ptr::null_mut();
         let req = unsafe { mlxforge_submit_text(self.handle, cprompt.as_ptr(), &cs, &mut err) };
+        if req.is_null() {
+            return Err(unsafe { take_string(err) }.unwrap_or_else(|| "submit failed".into()));
+        }
+        Ok(drain(req))
+    }
+
+    /// Run a vision-language completion to completion: a text `prompt` about one
+    /// `image` (raw encoded bytes — JPEG/PNG/…). The loaded model must be a
+    /// vision-language checkpoint (e.g. Qwen3-VL).
+    pub fn image(&self, prompt: &str, image: &[u8], sampling: &Sampling) -> Result<String, String> {
+        let cprompt = CString::new(prompt).map_err(|_| "prompt contains NUL".to_string())?;
+        let mut schema_keep: Option<CString> = None;
+        let cs = Self::c_sampling(sampling, &mut schema_keep);
+        let mut err: *mut c_char = ptr::null_mut();
+        let req = unsafe {
+            mlxforge_submit_image(
+                self.handle,
+                cprompt.as_ptr(),
+                image.as_ptr(),
+                image.len(),
+                &cs,
+                &mut err,
+            )
+        };
         if req.is_null() {
             return Err(unsafe { take_string(err) }.unwrap_or_else(|| "submit failed".into()));
         }

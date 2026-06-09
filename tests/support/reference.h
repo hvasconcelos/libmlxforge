@@ -86,6 +86,18 @@ inline std::vector<int> load_qwen3_5_token_ids(const std::string& name) {
   return load_token_ids_at(MLXFORGE_REF_FIXTURES_DIR_QWEN3_5, name);
 }
 
+// Same accessors against the Qwen3-VL fixture set (reference/fixtures_qwen3_vl):
+// vision-language goldens (ViT stages, M-RoPE, image merge, logits).
+inline std::string qwen3_vl_ref_path(const std::string& name) {
+  return std::string(MLXFORGE_REF_FIXTURES_DIR_QWEN3_VL) + "/" + name;
+}
+inline mx::array load_qwen3_vl_npy(const std::string& name) {
+  return mx::load(qwen3_vl_ref_path(name));
+}
+inline std::vector<int> load_qwen3_vl_token_ids(const std::string& name) {
+  return load_token_ids_at(MLXFORGE_REF_FIXTURES_DIR_QWEN3_VL, name);
+}
+
 struct CompareResult {
   bool ok = true;
   std::string message;

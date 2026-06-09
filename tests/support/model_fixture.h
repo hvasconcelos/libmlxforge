@@ -14,6 +14,8 @@
 #include "model/qwen3.h"
 #include "model/qwen3_5.h"
 #include "model/qwen3_moe.h"
+#include "model/qwen3_vl.h"
+#include "model/vision/vit.h"
 
 namespace mlxforge::test {
 
@@ -82,6 +84,37 @@ inline Qwen35Model& shared_qwen3_5_model() {
     Weights w = load_weights(qwen3_5_model_dir(), cfg);
     return Qwen35Model(std::move(cfg), std::move(w));
   }();
+  return model;
+}
+
+// Qwen3-VL vision-language model (ViT + multimodal integration tests). The
+// config and the (keep_vision) Weights are loaded once and shared: the ViT
+// encoder borrows the Weights, the language model takes a (cheap, handle-only)
+// copy. Function-local statics, so the shared Weights outlives the borrowers.
+inline std::string qwen3_vl_model_dir() { return MLXFORGE_MODEL_DIR_QWEN3_VL; }
+
+inline bool qwen3_vl_model_available() {
+  const std::string d = qwen3_vl_model_dir();
+  return !d.empty() && std::ifstream(d + "/config.json").good();
+}
+
+inline const ModelConfig& qwen3_vl_config() {
+  static ModelConfig cfg = ModelConfig::from_file(qwen3_vl_model_dir() + "/config.json");
+  return cfg;
+}
+
+inline const Weights& qwen3_vl_weights() {
+  static Weights weights = load_weights(qwen3_vl_model_dir(), qwen3_vl_config());
+  return weights;
+}
+
+inline VitEncoder& shared_qwen3_vl_vit() {
+  static VitEncoder vit(*qwen3_vl_config().vision, qwen3_vl_weights());
+  return vit;
+}
+
+inline Qwen3VLModel& shared_qwen3_vl_model() {
+  static Qwen3VLModel model(qwen3_vl_config(), qwen3_vl_weights());
   return model;
 }
 

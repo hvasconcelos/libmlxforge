@@ -58,6 +58,12 @@ export class Engine {
   chat(messages: ChatMessage[], sampling?: SamplingOptions): Stream;
   /** Stream a raw-text completion (no chat template). */
   text(prompt: string, sampling?: SamplingOptions): Stream;
+  /**
+   * Stream a vision-language completion: a text prompt about one image (a
+   * Buffer/Uint8Array of raw encoded bytes — JPEG/PNG/…). The loaded model must
+   * be a vision-language checkpoint (e.g. Qwen3-VL).
+   */
+  image(prompt: string, image: Uint8Array, sampling?: SamplingOptions): Stream;
   /** Run a chat to completion and return the full string. */
   complete(messages: ChatMessage[], sampling?: SamplingOptions): Promise<string>;
   /**

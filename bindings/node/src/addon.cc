@@ -219,6 +219,7 @@ class EngineWrap : public Napi::ObjectWrap<EngineWrap> {
                                        InstanceMethod("modelName", &EngineWrap::ModelName),
                                        InstanceMethod("submitChat", &EngineWrap::SubmitChat),
                                        InstanceMethod("submitText", &EngineWrap::SubmitText),
+                                       InstanceMethod("submitImage", &EngineWrap::SubmitImage),
                                        InstanceMethod("embed", &EngineWrap::Embed),
                                        InstanceMethod("dispose", &EngineWrap::Dispose),
                                    });
@@ -322,6 +323,24 @@ class EngineWrap : public Napi::ObjectWrap<EngineWrap> {
     if (!schema.empty()) s.json_schema = schema.c_str();
     char* err = nullptr;
     mlxforge_request* req = mlxforge_submit_text(eng_, prompt.c_str(), &s, &err);
+    return finish_submit(env, req, err);
+  }
+
+  Napi::Value SubmitImage(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (!eng_) throw Napi::Error::New(env, "engine is disposed");
+    if (info.Length() < 2 || !info[0].IsString() || !info[1].IsBuffer())
+      throw Napi::TypeError::New(env, "submitImage(prompt, imageBuffer, sampling?)");
+    std::string prompt = info[0].As<Napi::String>().Utf8Value();
+    Napi::Buffer<uint8_t> buf = info[1].As<Napi::Buffer<uint8_t>>();
+    std::string schema;  // kept alive across the submit call
+    mlxforge_sampling s = (info.Length() >= 3 && info[2].IsObject())
+                              ? parse_sampling(info[2].As<Napi::Object>(), schema)
+                              : mlxforge_sampling{};
+    if (!schema.empty()) s.json_schema = schema.c_str();
+    char* err = nullptr;
+    mlxforge_request* req =
+        mlxforge_submit_image(eng_, prompt.c_str(), buf.Data(), buf.Length(), &s, &err);
     return finish_submit(env, req, err);
   }
 

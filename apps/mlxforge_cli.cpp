@@ -36,9 +36,13 @@
 #include "core/model_source.h"
 #include "core/weights.h"
 #include "model/model_factory.h"
+#include "model/qwen3_vl.h"
+#include "model/vision/vit.h"
 #include "runtime/engine.h"
+#include "runtime/multimodal_stream.h"
 #include "runtime/single_stream.h"
 #include "tokenizer/tokenizer.h"
+#include "vision/image_decode.h"
 
 // Alias for convenience
 namespace mx = mlx::core;
@@ -205,6 +209,38 @@ int run_generate(const std::string& spec, const std::string& prompt_arg, int max
   return 0;
 }
 
+// Vision-language generation: decode an image, run it through the ViT, and
+// generate a response to `prompt_arg` about it. The model must be a Qwen3-VL
+// checkpoint (has a vision tower); the ViT borrows the loaded model's weights.
+int run_generate_image(const std::string& spec, const std::string& image_path,
+                       const std::string& prompt_arg, int max_tokens) {
+  LoadedModel lm = load_for_inference(spec);
+  auto* vl = dynamic_cast<mlxforge::Qwen3VLModel*>(lm.model.get());
+  if (vl == nullptr || !lm.cfg.has_vision_tower()) {
+    mlxforge::log::error("model '{}' is not a vision-language model (no ViT)", spec);
+    return 1;
+  }
+  mlxforge::VitEncoder vit(*lm.cfg.vision, lm.model->weights());
+  mx::array image = mlxforge::decode_image_file(image_path);
+
+  mlxforge::StreamingDetokenizer detok(lm.tok);
+  mlxforge::GenerateResult r = mlxforge::generate_from_image(
+      *vl, vit, lm.tok, prompt_arg, image, max_tokens, lm.cfg.eos_token_ids, [&](int id) {
+        std::string piece = detok.add(id);
+        std::fwrite(piece.data(), 1, piece.size(), stdout);
+        std::fflush(stdout);
+      });
+  std::string tail = detok.finish();
+  std::fwrite(tail.data(), 1, tail.size(), stdout);
+  std::fputc('\n', stdout);
+
+  mlxforge::log::info("generated {} tokens{}", r.tokens.size(),
+                      r.hit_eos ? " (stopped at EOS)" : "");
+  mlxforge::log::info("time to first token {:.1f}ms; decode {:.1f} tok/s ({} tokens in {:.1f}ms)",
+                      r.ttft_ms, r.decode_tokens_per_second(), r.decode_tokens, r.decode_ms);
+  return 0;
+}
+
 // Repeatable throughput benchmark: a discarded warmup run absorbs Metal
 // kernel-compilation cost, then `runs` timed runs report TTFT and steady-state
 // decode tok/s. EOS is disabled (empty eos_ids) so every run generates exactly
@@ -304,6 +340,16 @@ int main(int argc, char** argv) {
     // Parse max_tokens if provided, otherwise default to 64
     const int max_tokens = argc >= 5 ? std::stoi(argv[4]) : 64;
     return run_generate(argv[2], argv[3], max_tokens);
+  }
+  if (cmd == "image") {
+    // Vision-language generation: describe / answer about an image.
+    if (argc < 5) {
+      std::fprintf(stderr,
+                   "usage: mlxforge-cli image <model_dir> <image_file> <prompt> [max_tokens]\n");
+      return 2;
+    }
+    const int max_tokens = argc >= 6 ? std::stoi(argv[5]) : 128;
+    return run_generate_image(argv[2], argv[3], argv[4], max_tokens);
   }
   if (cmd == "bench") {
     // Repeatable throughput benchmark over a fixed prompt.

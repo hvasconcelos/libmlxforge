@@ -59,6 +59,10 @@ add_library(mlxforge_core STATIC
   src/model/qwen3.cpp
   src/model/qwen3_moe.cpp
   src/model/qwen3_5.cpp
+  src/model/vision/vit.cpp
+  src/model/qwen3_vl.cpp
+  src/vision/preprocess.cpp
+  src/vision/image_decode.cpp
   src/model/model_factory.cpp
   src/cache/kv_cache.cpp
   src/cache/batch_kv_cache.cpp
@@ -66,6 +70,7 @@ add_library(mlxforge_core STATIC
   src/sample/sampler.cpp
   src/sample/json_grammar.cpp
   src/runtime/single_stream.cpp
+  src/runtime/multimodal_stream.cpp
   src/runtime/embedding.cpp
   src/runtime/engine.cpp
   src/scheduler/scheduler.cpp
@@ -76,6 +81,9 @@ add_library(mlxforge_core STATIC
   src/tokenizer/tokenizer.cpp
 )
 target_include_directories(mlxforge_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# stb_image is header-only and used only inside src/vision/image_decode.cpp, so it
+# stays a PRIVATE include (never part of the public surface).
+target_include_directories(mlxforge_core PRIVATE ${stb_SOURCE_DIR})
 target_link_libraries(mlxforge_core PUBLIC mlx nlohmann_json::nlohmann_json Threads::Threads spdlog::spdlog)
 target_compile_features(mlxforge_core PUBLIC cxx_std_17)
 # Position-independent so it can be folded into the shared library / a Node addon.
