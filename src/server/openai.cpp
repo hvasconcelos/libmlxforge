@@ -167,7 +167,11 @@ ChatRequest parse_chat_request(const nlohmann::json& body) {
   auto it = body.find("messages");
   if (it == body.end() || !it->is_array() || it->empty())
     throw std::runtime_error("'messages' must be a non-empty array");
-  for (const auto& m : *it) r.messages.push_back(parse_message(m, r.images));
+  for (const auto& m : *it) {
+    std::vector<std::string> imgs;  // this message's images, in order
+    r.messages.push_back(parse_message(m, imgs));
+    r.message_images.push_back(std::move(imgs));
+  }
   parse_common(body, r);
   return r;
 }
