@@ -36,16 +36,16 @@ std::optional<std::string> sanitize_key(const std::string& raw, bool keep_vision
   if (ends_with(raw, ".inv_freq") || raw.find("rotary_emb.inv_freq") != std::string::npos) {
     return std::nullopt;
   }
-  // Vision tower of a multimodal checkpoint. Qwen-VL ships the ViT under
-  // "(model.)visual.*" (older wrappers: "vision_tower.*"). A text-only load drops
-  // it (the language model never reads it); a VLM load keeps it, canonicalized to
-  // a leading "visual." / "vision_tower." (the wrapper's "model." prefix stripped)
-  // so vision keys never collide with the decoder's "model.*".
+  // Vision tower of a multimodal checkpoint. Different exports name it
+  // differently — mlx-community single-file: "vision_tower.*"; HF/wrapped:
+  // "(model.)visual.*". A text-only load drops it (the language model never reads
+  // it); a VLM load keeps it, canonicalized to a single leading "visual.*" so the
+  // ViT reads one key form regardless of source and vision keys never collide
+  // with the decoder's "model.*".
   for (const char* vp : {"vision_tower.", "model.visual.", "visual."}) {
     if (raw.rfind(vp, 0) == 0) {
       if (!keep_vision) return std::nullopt;
-      const std::string mp = "model.";
-      return raw.rfind(mp, 0) == 0 ? raw.substr(mp.size()) : raw;
+      return "visual." + raw.substr(std::string(vp).size());
     }
   }
   // Strip the language-tower wrapper so keys match the canonical "model.*" /
@@ -213,18 +213,33 @@ Weights load_weights(const std::string& model_dir, const ModelConfig& cfg) {
   // drop it so the load stays lean.
   const bool keep_vision = cfg.has_vision_tower();
 
+  // Prefer the sharded layout, but only when every shard the index names is
+  // actually present: some mlx-community exports ship a single consolidated
+  // model.safetensors alongside a stale index.json that references shards that
+  // were never downloaded (e.g. Qwen3-VL-4B-Instruct-4bit). Fall back to the
+  // single file in that case.
+  bool loaded = false;
   std::ifstream index_file(index_path);
   if (index_file) {
     nlohmann::json index_json;
     index_file >> index_json;
     auto weight_map = parse_shard_index(index_json);
     const auto files = shard_files(weight_map);
-    log::debug("weights: sharded checkpoint, {} files", files.size());
-    for (const auto& file : files) {
-      log::debug("weights: loading shard {}", file);
-      absorb(w.tensors, mx::load_safetensors(model_dir + "/" + file).first, keep_vision);
+    const bool all_present = std::all_of(files.begin(), files.end(), [&](const std::string& f) {
+      return std::ifstream(model_dir + "/" + f).good();
+    });
+    if (all_present) {
+      log::debug("weights: sharded checkpoint, {} files", files.size());
+      for (const auto& file : files) {
+        log::debug("weights: loading shard {}", file);
+        absorb(w.tensors, mx::load_safetensors(model_dir + "/" + file).first, keep_vision);
+      }
+      loaded = true;
+    } else {
+      log::debug("weights: index.json shards absent; falling back to single file");
     }
-  } else {
+  }
+  if (!loaded) {
     const std::string single = model_dir + "/model.safetensors";
     if (!std::ifstream(single)) {
       throw std::runtime_error("weights: no model.safetensors[.index.json] in '" + model_dir + "'");

@@ -32,6 +32,7 @@ add_executable(mlxforge_tests
   model/qwen3_test.cpp
   model/qwen3_moe_test.cpp
   model/qwen3_5_test.cpp
+  model/vit_test.cpp
   tokenizer/tokenizer_test.cpp
   tokenizer/bpe_test.cpp
   tokenizer/spm_test.cpp
@@ -101,6 +102,15 @@ if(_mlxforge_model_snapshots_qwen3_5)
   list(GET _mlxforge_model_snapshots_qwen3_5 0 MLXFORGE_MODEL_DIR_QWEN3_5)
 endif()
 
+# Qwen3-VL vision-language model snapshot for the ViT / multimodal integration
+# tests (empty -> those tests self-skip). The 4bit checkpoint is ~3GB.
+file(GLOB _mlxforge_model_snapshots_qwen3_vl
+  "$ENV{HOME}/.cache/huggingface/hub/models--mlx-community--Qwen3-VL-4B-Instruct-4bit/snapshots/*")
+set(MLXFORGE_MODEL_DIR_QWEN3_VL "")
+if(_mlxforge_model_snapshots_qwen3_vl)
+  list(GET _mlxforge_model_snapshots_qwen3_vl 0 MLXFORGE_MODEL_DIR_QWEN3_VL)
+endif()
+
 # Qwen3-Embedding model dir for the embedding golden-gate test (empty -> it
 # self-skips). The base Qwen repo is public and loads as Qwen3 dense weights.
 # Glob for the *weights* (not just the snapshot dir): a tokenizer-only snapshot
@@ -139,6 +149,7 @@ target_compile_definitions(mlxforge_tests PRIVATE
   MLXFORGE_REF_FIXTURES_DIR_QWEN3="${CMAKE_SOURCE_DIR}/reference/fixtures_qwen3"
   MLXFORGE_REF_FIXTURES_DIR_QWEN3_MOE="${CMAKE_SOURCE_DIR}/reference/fixtures_qwen3_moe"
   MLXFORGE_REF_FIXTURES_DIR_QWEN3_5="${CMAKE_SOURCE_DIR}/reference/fixtures_qwen3_5"
+  MLXFORGE_REF_FIXTURES_DIR_QWEN3_VL="${CMAKE_SOURCE_DIR}/reference/fixtures_qwen3_vl"
   MLXFORGE_REF_FIXTURES_DIR_QWEN3_EMBEDDING="${CMAKE_SOURCE_DIR}/reference/fixtures_qwen3_embedding"
   MLXFORGE_REF_FIXTURES_DIR_GEMMA="${CMAKE_SOURCE_DIR}/reference/fixtures_gemma"
   MLXFORGE_MODEL_DIR="${MLXFORGE_MODEL_DIR}"
@@ -146,6 +157,7 @@ target_compile_definitions(mlxforge_tests PRIVATE
   MLXFORGE_MODEL_DIR_QWEN3="${MLXFORGE_MODEL_DIR_QWEN3}"
   MLXFORGE_MODEL_DIR_QWEN3_MOE="${MLXFORGE_MODEL_DIR_QWEN3_MOE}"
   MLXFORGE_MODEL_DIR_QWEN3_5="${MLXFORGE_MODEL_DIR_QWEN3_5}"
+  MLXFORGE_MODEL_DIR_QWEN3_VL="${MLXFORGE_MODEL_DIR_QWEN3_VL}"
   MLXFORGE_MODEL_DIR_QWEN3_EMBEDDING="${MLXFORGE_MODEL_DIR_QWEN3_EMBEDDING}"
   MLXFORGE_MODEL_DIR_GEMMA="${MLXFORGE_MODEL_DIR_GEMMA}"
   MLXFORGE_GGUF_MODEL="${MLXFORGE_GGUF_MODEL}")

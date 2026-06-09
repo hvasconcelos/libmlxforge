@@ -63,15 +63,18 @@ TEST_CASE("sanitize_key handles the Qwen3-VL wrapper layout and vision keep") {
   // The ViT under "model.visual.*" is still dropped by default (text-only load).
   CHECK_FALSE(sanitize_key("model.visual.blocks.0.attn.qkv.weight").has_value());
 
-  // With keep_vision (a VLM load) the ViT is kept, canonicalized to a leading
-  // "visual.*" (the wrapper "model." stripped) so it cannot collide with "model.*".
-  CHECK(sanitize_key("model.visual.blocks.0.attn.qkv.weight", /*keep_vision=*/true).value() ==
+  // With keep_vision (a VLM load) the ViT is kept, canonicalized to a single
+  // leading "visual.*" regardless of source naming, so it cannot collide with
+  // "model.*" and the ViT reads one key form. The mlx-community single-file
+  // export names it "vision_tower.*"; HF/wrapped exports use "(model.)visual.*".
+  CHECK(sanitize_key("vision_tower.blocks.0.attn.qkv.weight", /*keep_vision=*/true).value() ==
         "visual.blocks.0.attn.qkv.weight");
-  CHECK(sanitize_key("model.visual.patch_embed.proj.weight", true).value() ==
+  CHECK(sanitize_key("vision_tower.patch_embed.proj.weight", true).value() ==
         "visual.patch_embed.proj.weight");
+  CHECK(sanitize_key("model.visual.blocks.0.attn.qkv.weight", true).value() ==
+        "visual.blocks.0.attn.qkv.weight");
   CHECK(sanitize_key("model.visual.deepstack_merger_list.0.norm.weight", true).value() ==
         "visual.deepstack_merger_list.0.norm.weight");
-  // A bare "visual."/"vision_tower." prefix (no "model.") is kept as-is.
   CHECK(sanitize_key("visual.merger.linear_fc1.weight", true).value() ==
         "visual.merger.linear_fc1.weight");
 
