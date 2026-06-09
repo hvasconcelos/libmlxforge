@@ -14,10 +14,14 @@
   ],
   "scripts": {
     "build": "node-gyp rebuild",
+    "prebuild": "prebuildify --napi --strip",
     "test": "node test/smoke.cjs"
   },
   "dependencies": {
     "node-addon-api": "^8.0.0"
+  },
+  "devDependencies": {
+    "prebuildify": "^6.0.0"
   },
   "engines": {
     "node": ">=18"

@@ -1,6 +1,6 @@
-# mlxforge
+# libmlxforge
 
-**`libmlxforge` — an embeddable, batched MLX LLM engine you bind from any language.**
+**An embeddable, batched MLX LLM engine you bind from any language.**
 A from-scratch local inference engine in **C++ on Apple MLX** with **continuous
 batching**, exposed through a stable C ABI so Node (first), then Swift and Rust, can
 embed the *same batched engine* in-process — not just array ops, and not one stream at a
@@ -362,6 +362,12 @@ For the full design see the [`doc/`](./doc) folder:
   adding a new one, the golden-reference discipline.
 - [`doc/applications.md`](./doc/applications.md) — the server and CLI **harnesses**
   (how the engine is driven and validated) and the OpenAI API surface they expose.
+- [`doc/distribution.md`](./doc/distribution.md) — release artifacts and how
+  Homebrew, SwiftPM, npm, and the Rust crate consume them.
+- [`doc/abi-stability.md`](./doc/abi-stability.md) — the C-ABI versioning policy
+  and the automated symbol/leak guard (`scripts/check-abi.sh`).
+- [`doc/conformance.md`](./doc/conformance.md) — validate a build against the
+  `mlx-lm` golden reference (`scripts/conformance.sh`).
 - [`doc/contributing.md`](./doc/contributing.md) — build/test workflow,
   conventions, and the hard-won numerical gotchas.
 
