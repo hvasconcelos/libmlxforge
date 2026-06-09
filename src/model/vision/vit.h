@@ -33,11 +33,22 @@ class VitEncoder {
   const VisionConfig& config() const { return cfg_; }
 
   // Conv3d patch embedding as a matmul: pixel_values (num_patches, in_ch *
-  // temporal_patch * patch * patch) -> (num_patches, vit_hidden). The conv weight
-  // is a full-receptive-field kernel, so it reduces to a linear projection over
-  // the flattened patch (the processor lays the patch out in the same
-  // channel/temporal/height/width order as the raw weight, so no reorder needed).
+  // temporal_patch * patch * patch) -> (num_patches, vit_hidden). The conv kernel
+  // spans a whole patch, so it reduces to a linear projection of the (reordered)
+  // flattened patch.
   mx::array patch_embed(const mx::array& pixel_values) const;
+
+  // 2D RoPE frequency angles per patch, in the encoder's merged-block patch
+  // order: grid_thw (num_images, 3) int -> (num_tokens, head_dim/2) float32.
+  // Each patch's height/width grid positions index a shared inverse-frequency
+  // table; the height and width angle halves are concatenated.
+  mx::array rope_2d_freqs(const mx::array& grid_thw) const;
+
+  // Interpolated learned position embeddings: grid_thw -> (num_tokens,
+  // vit_hidden), in merged-block patch order. The square learned grid
+  // (num_position_embeddings) is bilinearly resampled to each image's patch grid,
+  // then permuted into the merger's block order.
+  mx::array pos_embed(const mx::array& grid_thw) const;
 
  private:
   // y = x @ W^T + b for a ViT Linear stored under "<key>.weight" / "<key>.bias".
