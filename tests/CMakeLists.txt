@@ -40,6 +40,8 @@ add_executable(mlxforge_tests
   # the shared library), so capi_test can drive the engine through mlxforge.h.
   ${CMAKE_SOURCE_DIR}/src/capi/mlxforge.cpp
   capi/capi_test.cpp
+  capi/capi_fuzz_test.cpp
+  capi/capi_endurance_test.cpp
 )
 target_include_directories(mlxforge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(mlxforge_tests PRIVATE doctest::doctest)

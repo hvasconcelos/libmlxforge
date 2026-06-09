@@ -1,5 +1,6 @@
 #include "sample/sampler.h"
 
+#include <algorithm>
 #include <limits>
 
 #include "mlx/ops.h"
@@ -112,7 +113,10 @@ SampleResult Sampler::sample(const mx::array& logits, const SamplingParams& para
   }
 
   mx::array scaled = mx::divide(adj, mx::array(params.temperature, adj.dtype()));
-  if (params.top_k > 0) scaled = apply_top_k(scaled, params.top_k);
+  // Clamp top_k to the vocab size: mx::topk throws for k > axis length, and a
+  // caller-supplied k larger than the vocab is just "keep everything" anyway.
+  const int vocab = logits.shape().back();
+  if (params.top_k > 0) scaled = apply_top_k(scaled, std::min(params.top_k, vocab));
   if (params.top_p < 1.0f) scaled = apply_top_p(scaled, params.top_p);
   if (params.min_p > 0.0f) scaled = apply_min_p(scaled, params.min_p);
 
