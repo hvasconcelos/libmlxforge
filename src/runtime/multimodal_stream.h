@@ -22,6 +22,8 @@ namespace mlxforge {
 
 namespace mx = mlx::core;
 
+struct PreprocessConfig;  // vision/preprocess.h (only a pointer crosses this header)
+
 // Greedy (argmax) multimodal generation. `image_features` / `deepstack` are the
 // ViT encoder outputs; `position_ids` is (3, prompt_len) from mrope_position_ids.
 // Calls `on_token(id)` for each emitted token; stops on EOS or max_tokens.
@@ -33,14 +35,17 @@ GenerateResult greedy_generate_multimodal(const Qwen3VLModel& model,
                                           const std::vector<int>& eos_ids,
                                           const std::function<void(int)>& on_token = {});
 
-// High-level single-image orchestration: preprocess `image_rgb` (decoded H×W×3
-// uint8), encode the ViT, render the ChatML prompt with the right number of
-// image placeholders, build M-RoPE positions, and greedily generate. Ties the
-// whole vision pipeline together behind one call (the CLI's image-to-text core).
+// High-level single-image orchestration: smart-resize + preprocess `image_rgb`
+// (decoded H×W×3 uint8), encode the ViT, render the ChatML prompt with the right
+// number of image placeholders, build M-RoPE positions, and greedily generate.
+// Ties the whole vision pipeline together behind one call (the CLI's image-to-
+// text core). `pcfg` overrides the preprocessing config (resize bounds etc.);
+// NULL uses the model's defaults.
 GenerateResult generate_from_image(const Qwen3VLModel& model, const VitEncoder& vit,
                                    const Tokenizer& tokenizer, const std::string& user_text,
                                    const mx::array& image_rgb, int max_tokens,
                                    const std::vector<int>& eos_ids,
-                                   const std::function<void(int)>& on_token = {});
+                                   const std::function<void(int)>& on_token = {},
+                                   const PreprocessConfig* pcfg = nullptr);
 
 }  // namespace mlxforge

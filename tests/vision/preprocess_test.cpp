@@ -27,6 +27,22 @@ TEST_CASE("Qwen3-VL preprocessing: normalize + patchify matches the reference") 
   assert_close(out.pixel_values, load_qwen3_vl_npy("pixel_values.npy"));
 }
 
+TEST_CASE("Qwen3-VL smart_resize rounds and rescales like the HF reference") {
+  const int F = 32;  // patch_size(16) * merge_size(2)
+  const int MIN = 256 * 256, MAX = 4096 * 4096;
+
+  // Already a multiple of F and in range -> only rounding (here, identity).
+  CHECK(smart_resize(800, 1216, F, MIN, MAX) == std::array<int, 2>{800, 1216});
+  // Not a multiple of F -> round each side to the nearest multiple.
+  CHECK(smart_resize(805, 1200, F, MIN, MAX) == std::array<int, 2>{800, 1216});
+  // Below min_pixels -> upscale (64x64 = 4096 px < 65536).
+  CHECK(smart_resize(64, 64, F, MIN, MAX) == std::array<int, 2>{256, 256});
+  // Above max_pixels -> downscale to the cap.
+  CHECK(smart_resize(5000, 5000, F, MIN, MAX) == std::array<int, 2>{4096, 4096});
+  // The fixture's small bounds leave a 64x64 image untouched.
+  CHECK(smart_resize(64, 64, F, 256, 4096) == std::array<int, 2>{64, 64});
+}
+
 TEST_CASE("Qwen3-VL image decode: PNG file decodes to the reference RGB") {
   // image.png and image_rgb.npy are the same picture (PNG is lossless), so the
   // decoded pixels must match the committed RGB array exactly.

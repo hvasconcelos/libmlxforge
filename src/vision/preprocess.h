@@ -30,6 +30,12 @@ struct PreprocessConfig {
   float rescale_factor = 1.0f / 255.0f;
   std::array<float, 3> image_mean = {0.5f, 0.5f, 0.5f};
   std::array<float, 3> image_std = {0.5f, 0.5f, 0.5f};
+  // Smart-resize bounds (total pixels). The image is resized so its area falls
+  // within [min_pixels, max_pixels] and both sides are multiples of
+  // patch_size*merge_size. Defaults mirror Qwen3-VL's preprocessor_config; lower
+  // max_pixels to cap the image-token count (faster, less detail).
+  int min_pixels = 256 * 256;   // 65536
+  int max_pixels = 4096 * 4096; // 16777216
 
   // Patch/temporal/merge from the model config; normalization at Qwen3-VL defaults.
   static PreprocessConfig from(const VisionConfig& v) {
@@ -48,7 +54,20 @@ struct Preprocessed {
 
 // Rescale + normalize + patchify an RGB image whose height and width are already
 // multiples of patch_size*merge_size. `image_rgb` is (H, W, 3) uint8. Throws if
-// the dimensions are not aligned (resize is a separate, later stage).
+// the dimensions are not aligned (use preprocess_image to resize first).
 Preprocessed patchify_image(const mx::array& image_rgb, const PreprocessConfig& cfg);
+
+// Full preprocessing for an arbitrary RGB image: smart-resize (HF qwen2_vl
+// algorithm) to an area within [min_pixels, max_pixels] with both sides a
+// multiple of patch_size*merge_size, then patchify. `image_rgb` is (H, W, 3)
+// uint8. The resize uses a cubic filter (stb) and is not bit-identical to HF's
+// PIL bicubic, so results on non-aligned images may differ slightly from the
+// reference; the aligned patchify path stays golden-exact.
+Preprocessed preprocess_image(const mx::array& image_rgb, const PreprocessConfig& cfg);
+
+// HF qwen2_vl smart_resize: round (height, width) to multiples of `factor`,
+// rescaling so the area stays within [min_pixels, max_pixels]. Exposed for tests.
+std::array<int, 2> smart_resize(int height, int width, int factor, int min_pixels,
+                                int max_pixels);
 
 }  // namespace mlxforge

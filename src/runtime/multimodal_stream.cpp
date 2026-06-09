@@ -71,11 +71,13 @@ GenerateResult generate_from_image(const Qwen3VLModel& model, const VitEncoder& 
                                    const Tokenizer& tokenizer, const std::string& user_text,
                                    const mx::array& image_rgb, int max_tokens,
                                    const std::vector<int>& eos_ids,
-                                   const std::function<void(int)>& on_token) {
+                                   const std::function<void(int)>& on_token,
+                                   const PreprocessConfig* pcfg) {
   const ModelConfig& cfg = model.config();
 
-  // Preprocess -> ViT encode.
-  Preprocessed pre = patchify_image(image_rgb, PreprocessConfig::from(*cfg.vision));
+  // Smart-resize + preprocess -> ViT encode.
+  PreprocessConfig pc = pcfg ? *pcfg : PreprocessConfig::from(*cfg.vision);
+  Preprocessed pre = preprocess_image(image_rgb, pc);
   mx::array grid(pre.grid_thw.data(), {1, 3}, mx::int32);
   VitEncoder::Output v = vit.forward(pre.pixel_values, grid);
 
