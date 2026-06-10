@@ -118,17 +118,17 @@ libraries (\code{node-mlx}, Apple's \code{MLXLLM}) cannot batch; batched servers
 (\code{vllm-mlx}, \code{omlx}) are Python processes reachable only over HTTP.
 \code{mlxforge} is simultaneously \emph{in-process}, \emph{MLX-native}, and
 \emph{batched}, exposed through a stable C ABI so it can be embedded from Node,
-Swift, and Rust as a shared library --- the library, not the bundled HTTP server
-or CLI, is the product.
+Swift, and Rust as a shared library. The product is that library, not the bundled
+HTTP server or CLI.
 
 The defining engineering constraint is that the failure mode of an inference
-engine is \emph{silent numerical garbage, not a crash}. Every numerically
-sensitive stage --- embedding, RoPE, attention masking, the per-layer forward,
-sampling, and the full vision pipeline --- is gated against \code{.npy} golden
+engine is \emph{silent numerical garbage, not a crash}. So every numerically
+sensitive stage (embedding, RoPE, attention masking, the per-layer forward,
+sampling, and the full vision pipeline) is gated against \code{.npy} golden
 fixtures dumped from the \code{mlx-lm}/\code{mlx-vlm} reference running the same
-weights, with greedy decoding required to match token-for-token. This paper
-documents the architecture and the mathematics in enough detail to reproduce or
-audit the implementation.
+weights, and greedy decoding has to match token-for-token. This paper documents
+the architecture and the mathematics in enough detail to reproduce or audit the
+implementation.
 \end{abstract}
 
 \tableofcontents
@@ -158,7 +158,7 @@ The supported model families are all LLaMA-style decoder transformers:
 \end{itemize}
 
 \section{The thesis: the library is the product}
-The deliverable is \code{libmlxforge} --- the engine as an embeddable shared
+The deliverable is \code{libmlxforge}: the engine as an embeddable shared
 library behind a stable \code{extern "C"} surface (\code{src/capi/mlxforge.h}),
 bound from other languages (Node first, then Swift and Rust). The HTTP server
 (\code{src/server/}) and the CLI (\code{apps/mlxforge\_cli.cpp}) are
@@ -179,7 +179,7 @@ property an embedded multi-user application needs:
 \begin{itemize}[nosep]
   \item \emph{Array-framework bindings} (\code{mlx-c}, \code{mlx-rs}) are
         in-process and MLX-native but leave you to build the whole engine
-        --- scheduler, KV cache, tokenizer, sampling --- yourself.
+        yourself: the scheduler, KV cache, tokenizer, and sampling.
   \item \emph{Single-stream model libraries} (\code{node-mlx},
         \code{MLXLLM}) are in-process and MLX-native but serve one request at a
         time. This is fatal for agent loops issuing parallel tool calls and for
@@ -217,12 +217,12 @@ Ollama                         & no (HTTP) & yes & yes          & HTTP \\
 \section{The defining constraint: silent numerical garbage}
 A web service that mis-handles a request throws an error you can see. An inference
 engine that gets the RoPE base wrong, transposes a weight incorrectly, or builds
-the attention mask off-by-one does not crash --- it produces fluent, plausible,
-\emph{wrong} text. The bug is invisible to inspection. The whole engineering
+the attention mask off-by-one does not crash. It produces fluent, plausible,
+\emph{wrong} text, and the bug is invisible to inspection. The whole engineering
 discipline of \code{mlxforge} follows from this: anything touching the forward
-pass, the KV cache, or sampling must be validated against a golden reference, not
-eyeballed. Chapter~\ref{ch:testing} describes the methodology; the rest of the
-paper repeatedly notes where a numerical invariant is load-bearing.
+pass, the KV cache, or sampling has to be validated against a golden reference
+rather than eyeballed. Chapter~\ref{ch:testing} describes the methodology, and the
+rest of the paper keeps pointing out where a numerical invariant is load-bearing.
 
 % ===========================================================================
 \chapter{System Architecture}
@@ -294,8 +294,8 @@ and the server/CLI harnesses are consumers above it.}
 
 \section{Build products and dependencies}
 \code{mlxforge\_core} is a static library aggregating all modules. Three products
-build on top of it: \code{libmlxforge} (the C-ABI shared library --- the product),
-the \code{mlxforge} server, and the \code{mlxforge-cli} tool. The server and CLI
+build on top of it: \code{libmlxforge} (the C-ABI shared library, which is the
+product), the \code{mlxforge} server, and the \code{mlxforge-cli} tool. The server and CLI
 are gated behind build flags so the released library is lean:
 
 \begin{lstlisting}[language=none,caption={Lean library build (no httplib, no curl).}]
@@ -312,10 +312,10 @@ cpp-httplib (server only), doctest (tests), spdlog v1.15.3, \code{stb\_image}
 for HuggingFace downloads.
 
 \section{Model-source resolution}
-The CLI and server take a model \emph{spec} --- either a local directory or a
-HuggingFace repo id --- and resolve it once via
-\code{mlxforge::resolve\_model\_dir} (\code{src/core/model\_source}). Resolution is
-a five-tier hierarchy:
+The CLI and server take a model \emph{spec}, either a local directory or a
+HuggingFace repo id, and resolve it once via
+\code{mlxforge::resolve\_model\_dir} (\code{src/core/model\_source}). Resolution
+walks a five-tier hierarchy:
 \begin{enumerate}[nosep]
   \item an existing local directory with \code{config.json} is used as-is;
   \item an existing HF parent directory (\code{models--org--name}) is resolved to
@@ -341,12 +341,12 @@ this single fact.
 thread that ever calls \code{mx::eval} or \code{mx::async\_eval}.}
 \end{quote}
 
-Every other thread --- HTTP request threads from the server's pool, test threads,
-binding callers --- touches only its own \code{Request} struct and the thread-safe
+Every other thread (HTTP request threads from the server's pool, test threads,
+binding callers) touches only its own \code{Request} struct and the thread-safe
 \code{Scheduler} queue. Because there is exactly one place MLX runs, there is
-nothing to contend over: no GPU-state mutex, no reader/writer locks, no
-compare-and-swap on model state. Concurrency correctness is achieved
-\emph{structurally}, not by locking the GPU.
+nothing to contend over. No GPU-state mutex, no reader/writer locks, no
+compare-and-swap on model state. Concurrency correctness comes from the structure
+itself, not from locking the GPU.
 
 \begin{table}[h]
 \centering
@@ -420,18 +420,18 @@ Each request carries a bounded, blocking single-producer/single-consumer queue
 consumer. Bounding the queue gives backpressure for free: a slow streaming client
 cannot make the worker accumulate unbounded tokens, because \code{push} blocks once
 the queue is full. Cancellation is an atomic flag the worker checks at iteration
-boundaries; a disconnected client causes immediate eviction.
+boundaries, so a disconnected client gets evicted right away.
 
 % ===========================================================================
 \chapter{Continuous-Batching Scheduler}
 \label{ch:batching}
 
 \section{Goals}
-The scheduler must serve concurrent users on one GPU worker, admit new work into an
-active batch and evict finished work dynamically, keep one GPU graph alive rather
-than recompiling per request, and --- the highest-severity invariant --- issue
-exactly one \code{async\_eval} per decode step covering the whole batch. The design
-follows the continuous-batching lineage of Orca~\citep{yu2022orca} and
+The scheduler has four jobs. It serves concurrent users on one GPU worker, admits
+new work into an active batch and evicts finished work dynamically, keeps one GPU
+graph alive rather than recompiling per request, and (the highest-severity
+invariant) issues exactly one \code{async\_eval} per decode step covering the whole
+batch. The design follows the continuous-batching lineage of Orca~\citep{yu2022orca} and
 vLLM~\citep{kwon2023vllm}, adapted to MLX's lazy-graph execution and the absence of
 a paged-attention primitive.
 
@@ -453,14 +453,14 @@ In steady-state decode, each iteration of the worker loop:
         with each row's RoPE position read from the cache and a ragged additive
         mask built so left-padded rows attend only their own history;
   \item samples the next token per row;
-  \item issues \emph{one} \code{mx::async\_eval} for the entire batch this step ---
-        never per row, never per layer;
+  \item issues \emph{one} \code{mx::async\_eval} for the entire batch this step,
+        never per row and never per layer;
   \item reads the chosen ids back to the host and pushes each row's token.
 \end{enumerate}
 This is the single most important performance and correctness rule in the engine.
-\code{Worker::decode\_steps()} counts these evaluations; under load the step count
-is far below the total token count, which is the operational proof that batching is
-actually happening.
+\code{Worker::decode\_steps()} counts these evaluations, and under load the step
+count sits far below the total token count. That gap is the operational proof that
+batching is actually happening.
 
 \section{Batch-size bucketing}
 A varying batch size would force MLX to re-trace and re-compile the decode graph
@@ -481,9 +481,9 @@ where the factor 2 accounts for keys and values. For Llama-3.2-1B
 ($n_{\text{layers}}=16$, $n_{\text{kv\,heads}}=8$, $d_{\text{head}}=64$) this is
 $2\cdot16\cdot8\cdot64\cdot2 = 32{,}768$ bytes ($32$\,KiB) per token. A batch whose
 projected footprint would exceed the configured budget
-(\code{src/cache/kv\_budget}) is refused; combined with the bounded waiting queue
-(which returns \code{429} on overflow), this prevents out-of-memory conditions
-under load.
+(\code{src/cache/kv\_budget}) is refused. Together with the bounded waiting queue
+(which returns \code{429} on overflow), this keeps the engine from running out of
+memory under load.
 
 % ===========================================================================
 \chapter{The Transformer Forward Pass}
@@ -634,7 +634,7 @@ where the smooth interpolation factor is
 Low-frequency (long-wavelength) channels are stretched by $f$, high-frequency
 channels are untouched, and a smooth blend bridges the band between. GGUF
 checkpoints bake this rescaling into a per-dimension factor array
-$\texttt{rope\_freq\_factors}$, so the engine simply multiplies:
+$\texttt{rope\_freq\_factors}$, so the engine just multiplies:
 $\theta_i' = \text{base}^{-i/d}\cdot \texttt{factors}_i$.
 
 \section{Batched application with per-row offset}
@@ -669,8 +669,8 @@ predicate is
 \end{equation}
 producing a $\R^{B\times 1\times N\times T_{kv}}$ additive mask. The mask therefore
 operates in \emph{physical-slot space} (indices into the contiguous cache),
-dropping the left-pad region while preserving causal order. This decoupling --- mask
-in slot space, RoPE in logical-position space --- is what lets a left-padded ragged
+dropping the left-pad region while preserving causal order. This decoupling (mask
+in slot space, RoPE in logical-position space) is what lets a left-padded ragged
 batch share one contiguous cache (Chapter~\ref{ch:cache}).
 
 % ===========================================================================
@@ -691,10 +691,10 @@ contiguous}, not paged: MLX's C++ surface has no paged-attention primitive, and 
 wants contiguous K/V. At the $\sim$1B parameter scale the padding waste is
 acceptable, and the contiguous layout keeps the kernel simple. The cache tracks:
 \begin{itemize}[nosep]
-  \item \code{idx} --- the populated sequence length (physical write position);
-  \item \code{offset} --- a per-row $(B,)$ RoPE position, which can differ from
+  \item \code{idx}: the populated sequence length (physical write position);
+  \item \code{offset}: a per-row $(B,)$ RoPE position, which can differ from
         \code{idx} (used for vision prefill, below);
-  \item \code{left\_padding} --- a per-row $(B,)$ count of leading pad slots.
+  \item \code{left\_padding}: a per-row $(B,)$ count of leading pad slots.
 \end{itemize}
 Capacity grows in blocks of 256 tokens to amortize reallocation. The valid key range
 for row $b$ is the slot interval $[\ell_b, \code{idx})$.
@@ -707,18 +707,18 @@ tokens into few \emph{positions}, the batch-1 cache is created with
 \code{idx} equal to the physical token count but \code{offset} equal to the maximum
 3D M-RoPE position (which is smaller). A generated VL token is pure text, so it
 decodes through the ordinary batched forward, carrying
-$\code{offset} = \max(\text{3D position}) + 1$ --- well below its image-padded token
-count --- with no per-row 3D positions needed in the cache.
+$\code{offset} = \max(\text{3D position}) + 1$, well below its image-padded token
+count, and no per-row 3D positions are needed in the cache.
 
 \section{Batch surgery}
 Three operations reshape the batch as it churns:
 \begin{itemize}[nosep]
-  \item \code{filter(keep)} --- retains selected rows (eviction), then shifts off
+  \item \code{filter(keep)} retains selected rows (eviction), then shifts off
         any common left-padding shared by all survivors;
-  \item \code{merge(other)} --- right-justifies two caches to a common length and
+  \item \code{merge(other)} right-justifies two caches to a common length and
         capacity and concatenates on the batch axis (admission of a freshly
         prefilled batch);
-  \item \code{pad\_dummies(extra)} --- appends masked dummy rows for bucketing
+  \item \code{pad\_dummies(extra)} appends masked dummy rows for bucketing
         (Chapter~\ref{ch:batching}).
 \end{itemize}
 
@@ -761,8 +761,8 @@ Given the token history, three penalties reshape the logits:
 \section{Log-probabilities}
 When requested (OpenAI \code{logprobs}/\code{top\_logprobs}), the engine reports the
 log-probability of the chosen token and of the top-$k$ alternatives. These are
-computed from the \emph{penalized but pre-filter} distribution --- a coherent softmax
-over the full vocabulary --- not from the temperature-scaled, truncated logits, so
+computed from the \emph{penalized but pre-filter} distribution (a coherent softmax
+over the full vocabulary), not from the temperature-scaled, truncated logits, so
 they are well-defined probabilities.
 
 \section{Constrained JSON decoding}
@@ -885,8 +885,8 @@ placeholder positions (\code{merge\_image\_features} partitions the sequence int
 text and image runs and concatenates the right source for each). DeepStack
 additionally takes intermediate ViT-block features (from configured block indices),
 merges them, and \emph{adds} them into the decoder hidden state after the
-corresponding decoder layers during prefill --- injecting multi-scale visual detail
-deeper into the language tower. DeepStack is a prefill-only phenomenon; a generated
+corresponding decoder layers during prefill, injecting multi-scale visual detail
+deeper into the language tower. DeepStack happens only during prefill; a generated
 token does not re-merge anything.
 
 \section{Interleaved 3D multimodal RoPE}
@@ -900,7 +900,7 @@ cannot express this, so \code{Qwen3VLModel} hand-rolls a half-split rotation:
 \end{equation}
 where for each frequency channel $\phi$ is computed from the position on the axis
 selected by a per-frequency $t/h/w$ selector (channels cycle through temporal,
-height, width). Crucially, for a text token $t=h=w$, so every axis gives the same
+height, width). For a text token $t=h=w$, so every axis gives the same
 position and M-RoPE reduces \emph{exactly} to ordinary 1D RoPE. A generated/decode
 token is a scalar position one past the prompt's maximum, jumping over the image's
 spatial extent.
@@ -913,7 +913,7 @@ merge, and 3D-M-RoPE forward; the resulting batch-1 K/V is adopted via
 \code{BatchKVCache::from\_single\_sequence} (Chapter~\ref{ch:cache}) and merged into
 the continuous-batching decode pool (\code{Worker::admit\_multimodal}). Because a
 generated VL token is pure text ($t=h=w$), it then decodes through the ordinary
-batched forward alongside text rows --- no per-row 3D positions are needed in the
+batched forward alongside text rows. No per-row 3D positions are needed in the
 cache, since the batched mask works in physical-slot space while RoPE uses the
 separate per-row \code{offset}. Every vision stage is golden-gated against
 \code{mlx-vlm}, and batched decode is gated equal to the single-stream path.
@@ -972,7 +972,7 @@ The \code{Tokenizer} wrapper owns one backend and renders family-specific chat
 templates via a \code{ChatFormat} enum (Llama3 header format; Qwen3/Qwen3.5 ChatML
 with tool definitions and a thinking toggle). A \code{StreamingDetokenizer} buffers
 incomplete UTF-8 byte sequences so that only complete characters are ever streamed
-to a client --- never a partial multi-byte glyph.
+to a client, never a partial multi-byte glyph.
 
 % ===========================================================================
 \chapter{The C ABI and Cross-Language Embedding}
@@ -1106,7 +1106,7 @@ the model cache and the throwaway venv are gitignored.
   \item \textbf{Golden-reference integration} (self-skip if the model is absent):
         embedding output, single-block output, final logits, first-token
         $\arg\max$ (exact), the full greedy token stream (exact), chat-template
-        parity, and --- for Qwen3-VL --- patch embed, 2D RoPE, position embeds, a
+        parity, and (for Qwen3-VL) patch embed, 2D RoPE, position embeds, a
         ViT block, merged output, DeepStack, 3D M-RoPE, post-M-RoPE $Q/K$, and the
         full multimodal forward.
 \end{itemize}
@@ -1115,16 +1115,16 @@ the numerical and scheduler paths require the model to be downloaded.
 
 \section{Two comparison modes}
 \begin{itemize}[nosep]
-  \item \code{assert\_close} --- elementwise allclose at fp16 relative tolerance
+  \item \code{assert\_close}: elementwise allclose at fp16 relative tolerance
         $\sim$1e-2, comparing in fp32 to avoid rounding in the comparison itself,
         reporting the first divergent coordinate.
-  \item \code{assert\_tokens\_equal} --- exact token-sequence equality.
+  \item \code{assert\_tokens\_equal}: exact token-sequence equality.
 \end{itemize}
 Decode-with-cache and full-recompute logits differ by fp16 accumulation order, so
 those paths are compared by $\arg\max$ / exact tokens, not by raw logits at tight
 tolerance. When a numerical mismatch needs localizing, the practice is to extend
-\code{dump\_ref.py} to emit the intermediate tensor and assert against it --- which
-is how the front-half embedding/post-norm/RoPE'd-$Q/K$ bugs were originally found.
+\code{dump\_ref.py} to emit the intermediate tensor and assert against it. That is
+how the front-half embedding/post-norm/RoPE'd-$Q/K$ bugs were originally found.
 
 \section{Hardening}
 Beyond correctness gates, the C ABI has fuzz tests (random/hostile sampling params),
@@ -1158,16 +1158,16 @@ and \code{dump-weights} (every tensor's shape/dtype, fp16 assertion, peak memory
 \chapter{Conclusion and Future Work}
 \label{ch:conclusion}
 
-\code{mlxforge} demonstrates that a fully batched LLM engine can be embedded
-in-process across languages on Apple Silicon, without sacrificing numerical
-fidelity. The architecture is organized around one structural fact --- MLX arrays
-are thread-bound, so one worker owns the GPU --- and one discipline --- silent
-numerical error is the enemy, so every sensitive stage is golden-gated.
+\code{mlxforge} shows that a fully batched LLM engine can be embedded in-process
+across languages on Apple Silicon without giving up numerical fidelity. The
+architecture rests on one structural fact and one discipline. The fact: MLX arrays
+are thread-bound, so a single worker owns the GPU. The discipline: silent numerical
+error is the enemy, so every sensitive stage is golden-gated.
 
-Open directions include: paged attention (when an MLX primitive exists) to remove
-the left-padding waste and enable prefix sharing; per-row 3D positions in the
-batched cache to batch vision \emph{prefill}, not just decode; and additional model
-families behind the same \code{DecoderModel} hooks.
+A few directions remain open. Paged attention (once an MLX primitive exists) would
+remove the left-padding waste and enable prefix sharing. Per-row 3D positions in the
+batched cache would let vision \emph{prefill} batch too, not just decode. And new
+model families can slot in behind the same \code{DecoderModel} hooks.
 
 % ===========================================================================
 \appendix
