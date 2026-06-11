@@ -86,6 +86,21 @@ class Worker {
   // push each row's token, marking finished rows.
   void decode_step();
 
+  // EXPERIMENTAL chunked-prefill interleaving (MLXFORGE_PREFILL_CHUNK > 0,
+  // prefix cache off): a cold admission's prefill advances one chunk per loop
+  // iteration with a decode step in between, so in-flight rows keep producing
+  // tokens during long or queued prefills instead of stalling completely.
+  // Off by default (0): admissions prefill monolithically, exactly as before.
+  struct PendingPrefill {
+    std::vector<std::shared_ptr<Request>> reqs;
+    mx::array tokens;  // (B, p_max) left-padded prompt ids
+    std::unique_ptr<BatchKVCache> cache;
+    int p_max = 0;
+    int pos = 0;  // prompt tokens consumed so far
+  };
+  void start_chunked_prefill(const std::vector<std::shared_ptr<Request>>& cold);
+  void advance_chunked_prefill();  // one chunk; merges + registers rows when done
+
   // Result of sampling the active batch in one graph: the chosen tokens, plus —
   // for the rows that requested log-probs (params.top_logprobs >= 0) — their
   // per-row log-prob arrays. All are built into the same graph so one async_eval
@@ -155,6 +170,10 @@ class Worker {
   std::vector<char> finished_;  // row marked for eviction
   std::vector<std::vector<int>> history_;  // prompt+generated ids per row (penalties)
   std::vector<mx::array> rng_keys_;        // per-row RNG key, advanced each step
+
+  // Interleaved-prefill state (worker thread only; null when idle or feature off).
+  std::unique_ptr<PendingPrefill> pending_;
+  int prefill_chunk_ = 0;  // from MLXFORGE_PREFILL_CHUNK; 0 = monolithic admits
 
   std::atomic<long> decode_steps_{0};
   std::atomic<bool> ready_{false};
