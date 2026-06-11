@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "cache/batch_kv_cache.h"
+#include "cache/prefix_cache.h"
 #include "model/decoder_model.h"
 #include "runtime/metrics.h"
 #include "scheduler/request.h"  // Request, TokenLogprob
@@ -35,12 +36,13 @@ class Worker {
 
   // `tok` (optional) supplies the per-token byte strings used for constrained
   // decoding; when null, grammar-constrained requests fall back to unconstrained.
-  // `kv_quant` selects the decode cache's storage (dense fp16 by default); the
-  // Engine validates it against the model before construction. Defined
-  // out-of-line (with the destructor) because the unique_ptr<VitEncoder> member
-  // needs the complete type for cleanup.
+  // `kv_quant` selects the decode cache's storage (dense fp16 by default) and
+  // `prefix` the prefix-cache setting; the Engine validates both against the
+  // model before construction. Defined out-of-line (with the destructor)
+  // because the unique_ptr<VitEncoder> member needs the complete type for
+  // cleanup.
   Worker(ModelFactory factory, Scheduler* scheduler, const Tokenizer* tok = nullptr,
-         KVQuantConfig kv_quant = {});
+         KVQuantConfig kv_quant = {}, PrefixCacheConfig prefix = {});
   ~Worker();
 
   Worker(const Worker&) = delete;
@@ -64,8 +66,16 @@ class Worker {
   void run();  // the loop; the sole caller of MLX eval/async_eval
 
   // Prefill `incoming` and merge it into the decode batch (emitting each row's
-  // first token).
+  // first token). With the prefix cache on, requests whose prompt matches
+  // pooled blocks are admitted one-by-one via prefill_with_prefix (seeded
+  // cache + suffix-only prefill); the rest take the batched cold path.
   void admit(const std::vector<std::shared_ptr<Request>>& incoming);
+  // Seal finished rows' PROMPT K/V into the prefix pool (called before the
+  // cache rows are filtered away). Prompt-only: decode-produced K/V differs
+  // from a recompute by fp16 accumulation order, so pooling it would break the
+  // warm==cold token gate. Skips multimodal rows — their K/V embeds image
+  // content and 3D positions that a token-id hash cannot identify.
+  void harvest_finished();
   // Register freshly-admitted rows into the decode-batch state (already merged
   // into the cache) and sample each row's first token from `last_logits` (rows
   // aligned to the new tail). Shared by the text and multimodal admit paths.
@@ -124,6 +134,9 @@ class Worker {
   Scheduler*        sched_;
   const Tokenizer*  tok_;  // for per-token bytes (grammar masking); may be null
   KVQuantConfig     kv_quant_;  // decode-cache storage (dense when bits == 0)
+  PrefixCacheConfig prefix_cfg_;
+  // Worker-thread-only (holds MLX arrays); null when the feature is off.
+  std::unique_ptr<PrefixCache> prefix_;
   std::vector<std::string> token_bytes_;  // id -> output bytes ("" for specials)
   bool token_bytes_built_ = false;
   std::unique_ptr<DecoderModel> model_;  // constructed and owned on the worker thread
@@ -152,6 +165,11 @@ class Worker {
   std::atomic<long long> ttft_us_sum_{0};
   std::atomic<long long> gen_us_sum_{0};
   std::atomic<long long> request_us_sum_{0};
+  // Prefix-cache counters (worker writes after each admit/harvest).
+  std::atomic<long> prefix_hits_{0};
+  std::atomic<long long> prefix_tokens_reused_{0};
+  std::atomic<long long> prefix_pool_bytes_{0};
+  std::atomic<long> prefix_pool_blocks_{0};
 
   std::thread thread_;
 };
