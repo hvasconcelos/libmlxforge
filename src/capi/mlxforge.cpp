@@ -172,6 +172,10 @@ mlxforge_engine* mlxforge_engine_create2(const char* model_spec,
       cfg.kv_spill_dir = opts->kv_spill_dir;
     if (covered(&opts->kv_spill_bytes + 1) && opts->kv_spill_bytes > 0)
       cfg.kv_spill_bytes = static_cast<std::size_t>(opts->kv_spill_bytes);
+    /* v8: chunked-prefill interleaving. Zero-init keeps the engine default
+     * (256, on); negative explicitly disables (monolithic prefill). */
+    if (covered(&opts->prefill_chunk + 1) && opts->prefill_chunk != 0)
+      cfg.prefill_chunk = opts->prefill_chunk < 0 ? 0 : opts->prefill_chunk;
 
     auto handle = std::make_unique<mlxforge_engine>();
     handle->model_name = model_spec;

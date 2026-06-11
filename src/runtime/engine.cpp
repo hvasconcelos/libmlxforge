@@ -98,6 +98,15 @@ PrefixCacheConfig validate_prefix_cache(const EngineConfig& ec, const ModelConfi
   return pc;
 }
 
+// Validate the chunked-prefill setting. 0 (monolithic) and any positive chunk
+// are valid; negative values are a caller error, not a silent default.
+int validate_prefill_chunk(const EngineConfig& ec) {
+  if (ec.prefill_chunk < 0)
+    throw std::runtime_error("prefill_chunk must be >= 0 (0 = monolithic); got " +
+                             std::to_string(ec.prefill_chunk));
+  return ec.prefill_chunk;
+}
+
 }  // namespace
 
 // Loads the model directory, config, and tokenizer metadata, but not weights.
@@ -176,7 +185,8 @@ Engine::Engine(EngineConfig cfg, Loaded loaded)
       // constrained decoding. tok_ is initialized above and outlives worker_.
       // cfg_ is initialized above, so the KV-quant validation sees the model.
       worker_(make_factory(std::move(loaded.dir), loaded.is_gguf), &scheduler_, &tok_,
-              validate_kv_quant(cfg, cfg_), validate_prefix_cache(cfg, cfg_, model_name_)) {
+              validate_kv_quant(cfg, cfg_), validate_prefix_cache(cfg, cfg_, model_name_),
+              validate_prefill_chunk(cfg)) {
   // Configure the max waiting requests for the batch scheduler.
   scheduler_.set_max_waiting(cfg.max_waiting);
 

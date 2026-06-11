@@ -44,13 +44,18 @@ struct ServerConfig {
   // Disk budget for spilled blocks in bytes. 0 = unbounded.
   std::size_t kv_spill_bytes = 0;
 
+  // Chunked-prefill interleaving: tokens prefilled per worker iteration, with a
+  // decode step in between (default on at 256). 0 = monolithic prefill.
+  int prefill_chunk = 256;
+
   // Parses command line arguments (the model via -m/--model, plus optional flags as --flag value or --flag=value),
   // layering configuration sources by precedence (lowest to highest):
   //   struct defaults < config file (-c/--config) < environment variables < CLI flags.
   // The config file is a JSON object (see from_file); CLI flags always override it.
   // Env vars: MLXFORGE_HOST, MLXFORGE_PORT, MLXFORGE_MAX_CTX, MLXFORGE_MAX_WAITING,
   // MLXFORGE_KV_BUDGET, MLXFORGE_KV_BITS, MLXFORGE_PREFIX_CACHE, MLXFORGE_KV_BLOCK,
-  // MLXFORGE_KV_POOL, MLXFORGE_KV_SPILL_DIR, MLXFORGE_KV_SPILL_BYTES.
+  // MLXFORGE_KV_POOL, MLXFORGE_KV_SPILL_DIR, MLXFORGE_KV_SPILL_BYTES,
+  // MLXFORGE_PREFILL_CHUNK.
   // Throws std::runtime_error if an unknown or malformed flag is encountered.
   static ServerConfig parse(const std::vector<std::string>& args);
 
@@ -58,7 +63,7 @@ struct ServerConfig {
   // with struct defaults filling any keys the file omits. Recognized keys
   // (snake_case): "model", "host", "port", "max_ctx", "max_waiting", "kv_budget",
   // "kv_bits", "prefix_cache", "kv_block", "kv_pool", "kv_spill_dir",
-  // "kv_spill_bytes".
+  // "kv_spill_bytes", "prefill_chunk".
   // Validates before applying: rejects unknown keys, wrong types, and out-of-range
   // values. Throws std::runtime_error (with the file path / offending key) on any
   // failure to open, parse, or validate.

@@ -118,19 +118,33 @@ The scheduler keeps a single persistent decode batch and continually admits new
 work into it and evicts finished work from it — rather than running fixed batches
 to completion. The three moving parts:
 
-### Prefill is a separate pass, then joined
+### Prefill is a separate pass, then joined — and interleaved with decode
 
 Prefill shape `(B_prefill, P_max, …)` and decode shape `(B_decode, 1, …)` are
-different, so they are kept as two regular-shaped passes rather than
-chunk-interleaved. Prefill (`runtime/batching`):
+different, so they are kept as two regular-shaped passes (never mixed into one
+ragged batch). Prefill:
 
 - Left-pads all prompts in the batch to a common `P_max` (left-padding so every
   row's last real token sits at the same physical column, `P_max - 1`).
-- Runs the forward in chunks of `kPrefillStepSize` (2048) for long prompts,
-  calling `cache.eval_state()` at each chunk boundary to bound graph/memory
-  growth.
-- Returns a populated `BatchKVCache`, the last-position logits per row, and the
-  left-padding vector. The worker `merge`s this cache into the live decode cache.
+- Runs the forward in chunks, calling `cache.eval_state()` at each chunk
+  boundary to bound graph/memory growth.
+- Produces a populated `BatchKVCache` and the last-position logits per row. The
+  worker `merge`s this cache into the live decode cache.
+
+**Chunked-prefill interleaving** (`prefill_chunk`, default 256; `0` =
+monolithic): rather than running an admission's whole prefill before the next
+decode step, the worker queues it as a *pending unit* and advances it one
+`prefill_chunk`-token chunk per loop iteration, with a decode step in between —
+so in-flight rows keep streaming while new prompts prefill (+25–35% batched
+throughput, up to 60% lower TTFT under load; chunking also pipelines better
+through Metal than one monolithic forward). Cold admissions share one batched
+unit; a prefix-cache hit becomes its own single-row unit (seeded cache +
+uncached suffix). Units complete FIFO; chunk boundaries change only *when*
+`eval_state()` runs, not what is computed, so the greedy stream is gated
+token-identical across chunk sizes (`tests/scheduler/worker_test.cpp`). At
+shutdown the loop drains pending units before exiting. The monolithic path
+(`prefill(...)` in `runtime/batching`, internal chunking at `kPrefillStepSize`
+2048) remains for `prefill_chunk = 0`.
 
 ### The steady-state decode step
 

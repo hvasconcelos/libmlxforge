@@ -354,3 +354,37 @@ TEST_CASE("C ABI v7 prefix cache: warm reuse keeps greedy output identical") {
 
   mlxforge_engine_free(eng);
 }
+
+TEST_CASE("C ABI v8 prefill_chunk: chunked and monolithic engines agree") {
+  if (!model_available()) {
+    MESSAGE("MLXFORGE_MODEL_DIR not present; skipping");
+    return;
+  }
+  // Long enough to span several 8-token chunks (greedy, deterministic).
+  const char* prompt =
+      "Once upon a time in a quiet village by the sea, a young engineer set out "
+      "to build a tiny inference engine that could stream tokens while it was "
+      "still reading the next request's prompt. Describe its first decode step.";
+  mlxforge_sampling s = {};
+  s.max_tokens = 12;
+
+  auto run_with_chunk = [&](int chunk) {
+    char* err = nullptr;
+    mlxforge_engine_opts2 opts = {};
+    opts.struct_size = sizeof(opts);
+    opts.prefill_chunk = chunk;  // 0 => default (on); < 0 => monolithic
+    mlxforge_engine* eng = mlxforge_engine_create2(model_dir().c_str(), &opts, &err);
+    REQUIRE_MESSAGE(eng != nullptr, (err ? err : "engine_create2 failed"));
+    mlxforge_request* r = mlxforge_submit_text(eng, prompt, &s, &err);
+    REQUIRE_MESSAGE(r != nullptr, (err ? err : "submit failed"));
+    const std::string out = drain(r);
+    mlxforge_request_free(r);
+    mlxforge_engine_free(eng);
+    return out;
+  };
+
+  const std::string monolithic = run_with_chunk(-1);
+  CHECK(monolithic.size() > 0);
+  CHECK(run_with_chunk(8) == monolithic);   // aggressive chunking
+  CHECK(run_with_chunk(0) == monolithic);   // the default (256, on)
+}

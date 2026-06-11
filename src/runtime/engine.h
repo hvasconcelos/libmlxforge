@@ -45,6 +45,12 @@ struct EngineConfig {
   // this directory and survive engine restarts. Empty = no spill.
   std::string kv_spill_dir;
   std::size_t kv_spill_bytes = 0;           // disk budget; 0 = unbounded
+  // Chunked-prefill interleaving: admissions prefill `prefill_chunk` tokens per
+  // worker iteration with a decode step in between, so in-flight rows keep
+  // streaming during long or queued prefills. On by default (256 tokens —
+  // benchmarked sweet spot); 0 = monolithic prefill per admission. Negative
+  // values are rejected at construction.
+  int prefill_chunk = 256;
 };
 
 // Per-call embedding options. The two int fields are tri-state: -1 means "use

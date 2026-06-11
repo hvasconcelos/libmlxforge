@@ -6,7 +6,6 @@
 #include <limits>
 
 #include "cache/block_store.h"
-#include "core/env.h"
 #include "core/logging.h"
 #include "model/qwen3_vl.h"
 #include "model/vision/vit.h"
@@ -60,13 +59,9 @@ bool consume(Request& req, int& produced, int id, const TokenLogprob* lp) {
 }  // namespace
 
 Worker::Worker(ModelFactory factory, Scheduler* scheduler, const Tokenizer* tok,
-               KVQuantConfig kv_quant, PrefixCacheConfig prefix)
+               KVQuantConfig kv_quant, PrefixCacheConfig prefix, int prefill_chunk)
     : factory_(std::move(factory)), sched_(scheduler), tok_(tok), kv_quant_(kv_quant),
-      prefix_cfg_(prefix),
-      prefill_chunk_(static_cast<int>(env_long("MLXFORGE_PREFILL_CHUNK", 0))) {
-  if (prefill_chunk_ > 0)
-    log::info("worker: EXPERIMENTAL interleaved prefill on (chunk={} tokens)", prefill_chunk_);
-}
+      prefix_cfg_(prefix), prefill_chunk_(prefill_chunk) {}
 
 Worker::~Worker() { stop(); }
 
@@ -231,13 +226,13 @@ void Worker::run() {
 
   while (true) {
     std::vector<std::shared_ptr<Request>> incoming;
-    if (reqs_.empty() && !pending_) {
+    if (reqs_.empty() && pending_.empty()) {
       auto r = sched_->next_waiting();  // block until work or stop+drained
       if (!r) break;
       incoming.push_back(r);
       auto more = sched_->take_waiting(kPrefillBatchSize - 1);
       incoming.insert(incoming.end(), more.begin(), more.end());
-    } else if (!pending_) {
+    } else if (pending_.empty()) {
       incoming = sched_->take_waiting(kPrefillBatchSize);  // non-blocking top-up
     }
     // With a prefill in flight, no new admissions are taken: one chunk advances
@@ -256,15 +251,14 @@ void Worker::run() {
           else if (r->is_multimodal()) admit_multimodal(r);
           else gen.push_back(std::move(r));
         }
-        // Interleaved mode hands cold admissions to the chunked state machine;
-        // with the prefix cache on (heterogeneous warm suffixes) it falls back
-        // to the monolithic path.
+        // Interleaved mode (the default) queues admissions as chunked-prefill
+        // units; prefill_chunk = 0 restores the monolithic path.
         if (!gen.empty()) {
-          if (prefill_chunk_ > 0 && !prefix_) start_chunked_prefill(gen);
+          if (prefill_chunk_ > 0) enqueue_admissions(gen);
           else admit(gen);
         }
       }
-      if (pending_) advance_chunked_prefill();
+      if (!pending_.empty()) advance_chunked_prefill();
       evict_finished();  // a row may finish on its very first token
       if (reqs_.empty()) continue;
 
@@ -283,22 +277,28 @@ void Worker::run() {
   log::info("worker: stopped after {} decode steps", decode_steps_.load());
 }
 
-void Worker::admit(const std::vector<std::shared_ptr<Request>>& incoming) {
-  // Split on the prefix cache: matched requests prefill only their suffix
-  // (one by one — their cached lengths are heterogeneous), the rest share the
-  // batched cold prefill.
-  std::vector<std::shared_ptr<Request>> cold;
-  std::vector<std::pair<std::shared_ptr<Request>, PrefixCache::Match>> warm;
+Worker::PrefixSplit Worker::split_prefix(
+    const std::vector<std::shared_ptr<Request>>& incoming) {
+  PrefixSplit out;
   for (const auto& r : incoming) {
     if (prefix_) {
       PrefixCache::Match m = prefix_->match(r->prompt_ids);
       if (m.tokens > 0) {
-        warm.emplace_back(r, std::move(m));
+        out.warm.emplace_back(r, std::move(m));
         continue;
       }
     }
-    cold.push_back(r);
+    out.cold.push_back(r);
   }
+  return out;
+}
+
+void Worker::admit(const std::vector<std::shared_ptr<Request>>& incoming) {
+  // Matched requests prefill only their suffix (one by one — their cached
+  // lengths are heterogeneous), the rest share the batched cold prefill.
+  PrefixSplit split = split_prefix(incoming);
+  std::vector<std::shared_ptr<Request>>& cold = split.cold;
+  auto& warm = split.warm;
 
   log::debug("worker: admitting {} request(s), {} prefix-warm (batch {} -> {})", incoming.size(),
              warm.size(), reqs_.size(), reqs_.size() + incoming.size());
@@ -331,9 +331,25 @@ void Worker::admit(const std::vector<std::shared_ptr<Request>>& incoming) {
   }
 }
 
-void Worker::start_chunked_prefill(const std::vector<std::shared_ptr<Request>>& cold) {
-  // Same left-padding as prefill() (batching.cpp); only the chunk loop is
-  // spread across worker iterations so decode steps can interleave.
+void Worker::enqueue_admissions(const std::vector<std::shared_ptr<Request>>& incoming) {
+  // Same warm/cold split as admit(); only the prefill is spread across worker
+  // iterations. A prefix hit becomes its own single-row unit: a cache seeded
+  // from the pooled blocks (as prefill_with_prefix does) plus the uncached
+  // suffix as its token stream. Cold requests share one left-padded batched
+  // unit, padded exactly like prefill() (batching.cpp).
+  PrefixSplit split = split_prefix(incoming);
+  for (auto& [r, m] : split.warm) {
+    auto cache = std::make_unique<BatchKVCache>(BatchKVCache::from_prefix(
+        model_->config().n_layers, m.blocks, m.tokens, kv_quant_));
+    cache->eval_state();  // materialize the seeded storage before the forward
+    const int suffix = static_cast<int>(r->prompt_ids.size()) - m.tokens;
+    mx::array toks(r->prompt_ids.data() + m.tokens, {1, suffix}, mx::int32);
+    pending_.push_back(PendingPrefill{{r}, std::move(toks), std::move(cache), suffix,
+                                      /*pos=*/0, /*reused_tokens=*/m.tokens});
+  }
+  std::vector<std::shared_ptr<Request>>& cold = split.cold;
+  if (cold.empty()) return;
+
   const int B = static_cast<int>(cold.size());
   int p_max = 0;
   for (const auto& r : cold) p_max = std::max(p_max, static_cast<int>(r->prompt_ids.size()));
@@ -346,27 +362,25 @@ void Worker::start_chunked_prefill(const std::vector<std::shared_ptr<Request>>& 
     left_padding[b] = pad;
     for (size_t j = 0; j < ids.size(); ++j) padded[b * p_max + pad + j] = ids[j];
   }
-
-  auto pending = std::make_unique<PendingPrefill>(PendingPrefill{
+  pending_.push_back(PendingPrefill{
       cold, mx::array(padded.data(), {B, p_max}, mx::int32),
       std::make_unique<BatchKVCache>(model_->config().n_layers, left_padding, kv_quant_),
-      p_max, /*pos=*/0});
-  pending_ = std::move(pending);
-  log::debug("worker: chunked prefill started ({} rows, {} tokens, chunk={})", B, p_max,
-             prefill_chunk_);
+      p_max, /*pos=*/0, /*reused_tokens=*/0});
+  log::debug("worker: chunked prefill queued ({} rows, {} tokens, chunk={}, queue={})", B, p_max,
+             prefill_chunk_, pending_.size());
 }
 
 void Worker::advance_chunked_prefill() {
-  PendingPrefill& p = *pending_;
+  PendingPrefill& p = pending_.front();
   const int B = static_cast<int>(p.reqs.size());
-  const int n = std::min(prefill_chunk_, p.p_max - p.pos);
+  const int n = std::min(prefill_chunk_, p.n_total - p.pos);
   mx::array chunk = mx::slice(p.tokens, {0, p.pos}, {B, p.pos + n});
   mx::array logits = model_->forward(chunk, *p.cache);
   p.cache->eval_state();  // same per-chunk materialization as prefill()
   p.pos += n;
-  if (p.pos < p.p_max) return;
+  if (p.pos < p.n_total) return;
 
-  // Final chunk: every row's last real token is at p_max-1, the last column.
+  // Final chunk: every row's last real token sits in the last column.
   const int n_last = logits.shape()[1];
   const int vocab = logits.shape()[2];
   mx::array last =
@@ -376,7 +390,13 @@ void Worker::advance_chunked_prefill() {
   if (!cache_) cache_ = std::move(p.cache);
   else cache_->merge(*p.cache);
   register_rows(p.reqs, last);
-  pending_.reset();
+  if (p.reused_tokens > 0) {
+    ++prefix_hits_;
+    prefix_tokens_reused_ += p.reused_tokens;
+    log::debug("worker: prefix hit ({} of {} prompt tokens reused)", p.reused_tokens,
+               p.reqs[0]->prompt_ids.size());
+  }
+  pending_.pop_front();
 }
 
 void Worker::register_rows(const std::vector<std::shared_ptr<Request>>& incoming,

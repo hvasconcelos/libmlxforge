@@ -7,6 +7,7 @@
 
 #include "core/config.h"
 #include "core/weights.h"
+#include "runtime/single_stream.h"
 #include "runtime/worker.h"
 #include "scheduler/request.h"
 #include "scheduler/scheduler.h"
@@ -50,4 +51,57 @@ TEST_CASE("worker processes a request submitted from another thread") {
 
   assert_tokens_equal(got, load_token_ids("greedy_tokens.npy"));
   CHECK(req->finish_reason == "length");
+}
+
+TEST_CASE("chunked prefill reproduces the reference greedy stream across chunk sizes") {
+  if (!model_available()) {
+    MESSAGE("MLXFORGE_MODEL_DIR not present; skipping");
+    return;
+  }
+  const std::string dir = model_dir();
+  mlxforge::ModelConfig cfg = mlxforge::ModelConfig::from_file(dir + "/config.json");
+
+  // A prompt long enough that prefill_chunk = 8 spans several chunks; the
+  // expectation comes from the validated single-stream loop.
+  std::vector<int> prompt;
+  for (const char* name : {"prompt_0_ids.npy", "prompt_1_ids.npy", "prompt_2_ids.npy"}) {
+    std::vector<int> ids = load_token_ids(name);
+    prompt.insert(prompt.end(), ids.begin(), ids.end());
+  }
+  const int kMax = 16;
+  const std::vector<int> expect =
+      mlxforge::greedy_generate(shared_model(), prompt, kMax, cfg.eos_token_ids).tokens;
+
+  for (int chunk : {0, 8}) {  // monolithic and aggressively chunked must agree
+    CAPTURE(chunk);
+    mlxforge::Scheduler sched;
+    mlxforge::Worker worker(
+        [dir] {
+          mlxforge::ModelConfig c = mlxforge::ModelConfig::from_file(dir + "/config.json");
+          auto w = mlxforge::load_weights(dir, c);
+          return std::make_unique<mlxforge::LlamaModel>(std::move(c), std::move(w));
+        },
+        &sched, /*tok=*/nullptr, /*kv_quant=*/{}, /*prefix=*/{}, chunk);
+    worker.start();
+
+    // Two simultaneous submissions land in one batched (left-padded) cold unit.
+    auto make = [&] {
+      auto r = std::make_shared<mlxforge::Request>();
+      r->prompt_ids = prompt;
+      r->params.temperature = 0.0f;
+      r->max_tokens = kMax;
+      r->eos_ids = cfg.eos_token_ids;
+      return r;
+    };
+    auto a = make(), b = make();
+    REQUIRE(sched.submit(a));
+    REQUIRE(sched.submit(b));
+    for (const auto& r : {a, b}) {
+      std::vector<int> got;
+      int tok = 0;
+      while (r->tokens.pop(tok)) got.push_back(tok);
+      assert_tokens_equal(got, expect);
+    }
+    worker.stop();
+  }
 }

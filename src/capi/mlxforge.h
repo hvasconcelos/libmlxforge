@@ -46,8 +46,10 @@ extern "C" {
  *       opts2 carries struct_size so future fields append without a create3).
  *   v7: mlxforge_engine_opts2 prefix-cache fields (prefix_cache, kv_block_size,
  *       kv_pool_bytes, kv_spill_dir, kv_spill_bytes) — appended, struct_size-
- *       gated; no new symbols. */
-#define MLXFORGE_ABI_VERSION 7
+ *       gated; no new symbols.
+ *   v8: mlxforge_engine_opts2.prefill_chunk (chunked-prefill interleaving,
+ *       default-on) — appended, struct_size-gated; no new symbols. */
+#define MLXFORGE_ABI_VERSION 8
 
 typedef struct mlxforge_engine mlxforge_engine;
 typedef struct mlxforge_request mlxforge_request;
@@ -135,7 +137,13 @@ mlxforge_engine* mlxforge_engine_create(const char* model_spec,
  * prompt sharing a token prefix skips that part of prefill (same greedy
  * tokens, much lower time-to-first-token). kv_spill_dir adds an SSD tier:
  * RAM-evicted blocks persist there and survive engine restarts. Vision-
- * language and hybrid (Qwen3.5) models reject the option at creation. */
+ * language and hybrid (Qwen3.5) models reject the option at creation.
+ *
+ * prefill_chunk (v8+) tunes chunked-prefill interleaving: admissions prefill
+ * this many tokens per worker iteration with a decode step in between, so
+ * in-flight requests keep streaming during long or queued prefills. On by
+ * default (256). 0 keeps the default; < 0 disables it (monolithic prefill
+ * per admission, the pre-v8 behavior). */
 typedef struct {
   size_t struct_size;   /* caller sets sizeof(mlxforge_engine_opts2) */
   int max_waiting;      /* max queued requests; <= 0 => default (256) */
@@ -147,6 +155,9 @@ typedef struct {
   long long kv_pool_bytes;   /* pool RAM budget; 0 => default (1 GiB); < 0 => unbounded */
   const char* kv_spill_dir;  /* SSD spill directory; NULL/empty => no spill */
   long long kv_spill_bytes;  /* spill disk budget; <= 0 => unbounded */
+  /* ---- v8 ---- */
+  int prefill_chunk;         /* tokens per interleaved prefill chunk; 0 => default
+                                (256); < 0 => monolithic prefill (off) */
 } mlxforge_engine_opts2;
 
 /* Create an engine with extended options (v6+). Identical contract to

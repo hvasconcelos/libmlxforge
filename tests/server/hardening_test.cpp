@@ -49,6 +49,18 @@ TEST_CASE("ServerConfig parses flags with defaults") {
   CHECK(c.max_waiting == 16);
 }
 
+TEST_CASE("ServerConfig parses prefill_chunk (flag, file, validation)") {
+  CHECK(ServerConfig::parse({"-m", "/m"}).prefill_chunk == 256);  // default on
+  CHECK(ServerConfig::parse({"-m", "/m", "--prefill-chunk", "0"}).prefill_chunk == 0);
+  CHECK(ServerConfig::parse({"-m", "/m", "--prefill-chunk=512"}).prefill_chunk == 512);
+  CHECK_THROWS_AS(ServerConfig::parse({"-m", "/m", "--prefill-chunk", "-1"}),
+                  std::runtime_error);
+  CHECK(ServerConfig::parse({"-c", write_temp_config(R"({"prefill_chunk": 128})")})
+            .prefill_chunk == 128);
+  CHECK_THROWS_AS(ServerConfig::parse({"-c", write_temp_config(R"({"prefill_chunk": -4})")}),
+                  std::runtime_error);
+}
+
 TEST_CASE("ServerConfig rejects unknown and positional args") {
   CHECK_THROWS_AS(ServerConfig::parse({"-m", "/m", "--bogus", "x"}), std::runtime_error);
   CHECK_THROWS_AS(ServerConfig::parse({"-m"}), std::runtime_error);    // missing value
