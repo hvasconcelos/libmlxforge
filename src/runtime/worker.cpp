@@ -6,6 +6,7 @@
 #include <limits>
 
 #include "cache/block_store.h"
+#include "core/env.h"
 #include "core/logging.h"
 #include "model/qwen3_vl.h"
 #include "model/vision/vit.h"
@@ -61,7 +62,11 @@ bool consume(Request& req, int& produced, int id, const TokenLogprob* lp) {
 Worker::Worker(ModelFactory factory, Scheduler* scheduler, const Tokenizer* tok,
                KVQuantConfig kv_quant, PrefixCacheConfig prefix)
     : factory_(std::move(factory)), sched_(scheduler), tok_(tok), kv_quant_(kv_quant),
-      prefix_cfg_(prefix) {}
+      prefix_cfg_(prefix),
+      prefill_chunk_(static_cast<int>(env_long("MLXFORGE_PREFILL_CHUNK", 0))) {
+  if (prefill_chunk_ > 0)
+    log::info("worker: EXPERIMENTAL interleaved prefill on (chunk={} tokens)", prefill_chunk_);
+}
 
 Worker::~Worker() { stop(); }
 
@@ -226,15 +231,17 @@ void Worker::run() {
 
   while (true) {
     std::vector<std::shared_ptr<Request>> incoming;
-    if (reqs_.empty()) {
+    if (reqs_.empty() && !pending_) {
       auto r = sched_->next_waiting();  // block until work or stop+drained
       if (!r) break;
       incoming.push_back(r);
       auto more = sched_->take_waiting(kPrefillBatchSize - 1);
       incoming.insert(incoming.end(), more.begin(), more.end());
-    } else {
+    } else if (!pending_) {
       incoming = sched_->take_waiting(kPrefillBatchSize);  // non-blocking top-up
     }
+    // With a prefill in flight, no new admissions are taken: one chunk advances
+    // per iteration, with a decode step in between (interleaved mode only).
 
     try {
       if (!incoming.empty()) {
@@ -249,8 +256,15 @@ void Worker::run() {
           else if (r->is_multimodal()) admit_multimodal(r);
           else gen.push_back(std::move(r));
         }
-        if (!gen.empty()) admit(gen);
+        // Interleaved mode hands cold admissions to the chunked state machine;
+        // with the prefix cache on (heterogeneous warm suffixes) it falls back
+        // to the monolithic path.
+        if (!gen.empty()) {
+          if (prefill_chunk_ > 0 && !prefix_) start_chunked_prefill(gen);
+          else admit(gen);
+        }
       }
+      if (pending_) advance_chunked_prefill();
       evict_finished();  // a row may finish on its very first token
       if (reqs_.empty()) continue;
 
@@ -315,6 +329,54 @@ void Worker::admit(const std::vector<std::shared_ptr<Request>>& incoming) {
     log::debug("worker: prefix hit ({} of {} prompt tokens reused)", m.tokens,
                r->prompt_ids.size());
   }
+}
+
+void Worker::start_chunked_prefill(const std::vector<std::shared_ptr<Request>>& cold) {
+  // Same left-padding as prefill() (batching.cpp); only the chunk loop is
+  // spread across worker iterations so decode steps can interleave.
+  const int B = static_cast<int>(cold.size());
+  int p_max = 0;
+  for (const auto& r : cold) p_max = std::max(p_max, static_cast<int>(r->prompt_ids.size()));
+
+  std::vector<int> left_padding(B);
+  std::vector<int> padded(static_cast<size_t>(B) * p_max, 0);
+  for (int b = 0; b < B; ++b) {
+    const auto& ids = cold[b]->prompt_ids;
+    const int pad = p_max - static_cast<int>(ids.size());
+    left_padding[b] = pad;
+    for (size_t j = 0; j < ids.size(); ++j) padded[b * p_max + pad + j] = ids[j];
+  }
+
+  auto pending = std::make_unique<PendingPrefill>(PendingPrefill{
+      cold, mx::array(padded.data(), {B, p_max}, mx::int32),
+      std::make_unique<BatchKVCache>(model_->config().n_layers, left_padding, kv_quant_),
+      p_max, /*pos=*/0});
+  pending_ = std::move(pending);
+  log::debug("worker: chunked prefill started ({} rows, {} tokens, chunk={})", B, p_max,
+             prefill_chunk_);
+}
+
+void Worker::advance_chunked_prefill() {
+  PendingPrefill& p = *pending_;
+  const int B = static_cast<int>(p.reqs.size());
+  const int n = std::min(prefill_chunk_, p.p_max - p.pos);
+  mx::array chunk = mx::slice(p.tokens, {0, p.pos}, {B, p.pos + n});
+  mx::array logits = model_->forward(chunk, *p.cache);
+  p.cache->eval_state();  // same per-chunk materialization as prefill()
+  p.pos += n;
+  if (p.pos < p.p_max) return;
+
+  // Final chunk: every row's last real token is at p_max-1, the last column.
+  const int n_last = logits.shape()[1];
+  const int vocab = logits.shape()[2];
+  mx::array last =
+      mx::reshape(mx::slice(logits, {0, n_last - 1, 0}, {B, n_last, vocab}), {B, vocab});
+  mx::eval(last);
+
+  if (!cache_) cache_ = std::move(p.cache);
+  else cache_->merge(*p.cache);
+  register_rows(p.reqs, last);
+  pending_.reset();
 }
 
 void Worker::register_rows(const std::vector<std::shared_ptr<Request>>& incoming,
