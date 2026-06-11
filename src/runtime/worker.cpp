@@ -5,6 +5,7 @@
 #include <chrono>
 #include <limits>
 
+#include "cache/block_store.h"
 #include "core/logging.h"
 #include "model/qwen3_vl.h"
 #include "model/vision/vit.h"
@@ -199,6 +200,26 @@ void Worker::run() {
     prefix_ = std::make_unique<PrefixCache>(prefix_cfg_);
     log::info("worker: prefix cache on (block={} pool={} bytes)", prefix_cfg_.block_size,
               prefix_cfg_.pool_bytes);
+    if (!prefix_cfg_.spill_dir.empty()) {
+      // SSD tier: RAM-evicted blocks are serialized HERE (this thread owns the
+      // arrays) and queued to the store's byte-only writer thread; a pool miss
+      // synchronously revives the bytes into fresh worker-thread arrays.
+      block_store_ = std::make_unique<BlockStore>(prefix_cfg_.spill_dir, prefix_cfg_.spill_bytes,
+                                                  prefix_cfg_.salt);
+      prefix_->pool().set_evict_hook(
+          [this](uint64_t h, const std::shared_ptr<const KVBlock>& b) {
+            if (block_store_->contains(h)) return;
+            block_store_->put(h, serialize_block(*b, prefix_cfg_.salt));
+            ++spill_writes_;
+          });
+      prefix_->set_miss_fn([this](uint64_t h) -> std::shared_ptr<const KVBlock> {
+        std::optional<std::vector<char>> bytes = block_store_->get(h);
+        if (!bytes) return nullptr;
+        std::shared_ptr<KVBlock> blk = deserialize_block(*bytes, prefix_cfg_.salt);
+        if (blk) ++spill_reads_;
+        return blk;
+      });
+    }
   }
   ready_.store(true);
   log::info("worker: model loaded, ready");
@@ -564,6 +585,8 @@ WorkerMetrics Worker::metrics() const {
   m.prefix_tokens_reused = prefix_tokens_reused_.load();
   m.prefix_pool_bytes = prefix_pool_bytes_.load();
   m.prefix_pool_blocks = prefix_pool_blocks_.load();
+  m.spill_writes = spill_writes_.load();
+  m.spill_reads = spill_reads_.load();
   return m;
 }
 

@@ -68,7 +68,11 @@ KVQuantConfig validate_kv_quant(const EngineConfig& ec, const ModelConfig& mc) {
 // EngineConfig::model_spec has already been moved into Engine::model_name_.
 PrefixCacheConfig validate_prefix_cache(const EngineConfig& ec, const ModelConfig& mc,
                                         const std::string& model_name) {
-  if (!ec.prefix_cache) return {};
+  if (!ec.prefix_cache) {
+    if (!ec.kv_spill_dir.empty())
+      throw std::runtime_error("kv_spill_dir requires prefix_cache to be enabled");
+    return {};
+  }
   const int bs = ec.kv_block_size;
   if (bs < 16 || bs > 4096 || (bs & (bs - 1)) != 0)
     throw std::runtime_error("kv_block_size must be a power of two in [16, 4096]; got " +
@@ -83,6 +87,8 @@ PrefixCacheConfig validate_prefix_cache(const EngineConfig& ec, const ModelConfi
   pc.enabled = true;
   pc.block_size = bs;
   pc.pool_bytes = ec.kv_pool_bytes;
+  pc.spill_dir = ec.kv_spill_dir;
+  pc.spill_bytes = ec.kv_spill_bytes;
   // Salt every block key with the model identity + storage config so pooled
   // (and, later, persisted) blocks can never cross models or settings.
   const std::string fp = model_name + "|" + mc.model_type + "|" + std::to_string(mc.n_layers) +

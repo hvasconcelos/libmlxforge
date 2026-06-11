@@ -41,6 +41,10 @@ struct EngineConfig {
   bool prefix_cache = false;
   int kv_block_size = 256;                  // pool granularity, power of two in [16, 4096]
   std::size_t kv_pool_bytes = 1ull << 30;   // pooled-KV RAM budget; 0 = unbounded
+  // SSD spill tier (requires prefix_cache): RAM-evicted blocks persist under
+  // this directory and survive engine restarts. Empty = no spill.
+  std::string kv_spill_dir;
+  std::size_t kv_spill_bytes = 0;           // disk budget; 0 = unbounded
 };
 
 // Per-call embedding options. The two int fields are tri-state: -1 means "use

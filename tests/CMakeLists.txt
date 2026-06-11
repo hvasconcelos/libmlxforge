@@ -22,6 +22,7 @@ add_executable(mlxforge_tests
   cache/kv_budget_test.cpp
   cache/block_pool_test.cpp
   cache/prefix_cache_test.cpp
+  cache/block_store_test.cpp
   model/quantized_sdpa_test.cpp
   sample/sampler_test.cpp
   sample/json_grammar_test.cpp
@@ -34,6 +35,7 @@ add_executable(mlxforge_tests
   runtime/prefill_prefix_test.cpp
   scheduler/continuous_batch_test.cpp
   scheduler/prefix_reuse_test.cpp
+  scheduler/prefix_spill_test.cpp
   runtime/bucketing_test.cpp
   scheduler/validation_test.cpp
   model/qwen3_test.cpp

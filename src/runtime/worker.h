@@ -29,6 +29,7 @@ namespace mlxforge {
 
 class Tokenizer;    // for per-token byte strings used by grammar masking
 class VitEncoder;   // lazily built for multimodal requests (borrows model weights)
+class BlockStore;   // SSD spill tier for the prefix cache (cache/block_store.h)
 
 class Worker {
  public:
@@ -135,6 +136,9 @@ class Worker {
   const Tokenizer*  tok_;  // for per-token bytes (grammar masking); may be null
   KVQuantConfig     kv_quant_;  // decode-cache storage (dense when bits == 0)
   PrefixCacheConfig prefix_cfg_;
+  // SSD tier; declared before prefix_ so the pool's hooks (which reference it)
+  // are destroyed first. Byte-only across threads; null when spill is off.
+  std::unique_ptr<BlockStore> block_store_;
   // Worker-thread-only (holds MLX arrays); null when the feature is off.
   std::unique_ptr<PrefixCache> prefix_;
   std::vector<std::string> token_bytes_;  // id -> output bytes ("" for specials)
@@ -170,6 +174,8 @@ class Worker {
   std::atomic<long long> prefix_tokens_reused_{0};
   std::atomic<long long> prefix_pool_bytes_{0};
   std::atomic<long> prefix_pool_blocks_{0};
+  std::atomic<long> spill_writes_{0};  // blocks queued to the SSD tier
+  std::atomic<long> spill_reads_{0};   // blocks revived from the SSD tier
 
   std::thread thread_;
 };

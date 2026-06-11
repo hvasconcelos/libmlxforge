@@ -22,6 +22,8 @@ struct WorkerMetrics {
   long long prefix_tokens_reused = 0;    // prompt tokens whose prefill was skipped
   long long prefix_pool_bytes = 0;       // pooled KV bytes currently held
   long prefix_pool_blocks = 0;           // pooled block count
+  long spill_writes = 0;                 // blocks spilled to the SSD tier
+  long spill_reads = 0;                  // blocks revived from the SSD tier
 };
 
 }  // namespace mlxforge

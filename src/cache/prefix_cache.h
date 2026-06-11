@@ -36,6 +36,11 @@ struct PrefixCacheConfig {
   // Salt folded into every block key: model fingerprint + storage config, so
   // persisted blocks can never cross models or quantization settings.
   uint64_t salt = 0;
+  // SSD spill tier: RAM-evicted blocks persist under this directory and are
+  // reloaded on a pool miss (also across engine restarts). Empty = no spill.
+  std::string spill_dir;
+  // Disk budget for spilled blocks (LRU-deleted beyond it); 0 = unbounded.
+  std::size_t spill_bytes = 0;
 };
 
 class PrefixCache {
@@ -62,14 +67,21 @@ class PrefixCache {
   // the pool never pins the batch cache's buffers.
   void harvest(const std::vector<int>& ids, int len, int n_layers, const LayerFetch& fetch);
 
+  // Second-level lookup consulted when the RAM pool misses (the SSD tier):
+  // returns the revived block or nullptr. The revived block is re-promoted
+  // into the pool. Runs inside match() on the worker thread.
+  using MissFn = std::function<std::shared_ptr<const KVBlock>(uint64_t)>;
+  void set_miss_fn(MissFn fn) { on_miss_ = std::move(fn); }
+
   const PrefixCacheConfig& config() const { return cfg_; }
   std::size_t pool_bytes() const { return pool_.bytes(); }
   std::size_t pool_blocks() const { return pool_.size(); }
-  BlockPool& pool() { return pool_; }  // Phase-2 spill hook installation
+  BlockPool& pool() { return pool_; }  // spill (evict) hook installation
 
  private:
   PrefixCacheConfig cfg_;
   BlockPool pool_;
+  MissFn on_miss_;
 };
 
 }  // namespace mlxforge

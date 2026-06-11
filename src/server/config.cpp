@@ -57,8 +57,8 @@ ServerConfig ServerConfig::from_file(const std::string& path) {
 
   // Reject unknown keys up front so typos (e.g. "prot") fail loudly.
   static const std::set<std::string> kKnownKeys = {
-      "model",     "host",    "port",         "max_ctx", "max_waiting",
-      "kv_budget", "kv_bits", "prefix_cache", "kv_block", "kv_pool"};
+      "model",     "host",    "port",         "max_ctx",  "max_waiting",  "kv_budget",
+      "kv_bits",   "prefix_cache", "kv_block", "kv_pool", "kv_spill_dir", "kv_spill_bytes"};
   for (const auto& [key, _] : j.items()) {
     if (kKnownKeys.find(key) == kKnownKeys.end()) {
       throw std::runtime_error("config file: unknown key '" + key + "' in '" + path + "'");
@@ -101,6 +101,12 @@ ServerConfig ServerConfig::from_file(const std::string& path) {
     long long pool = require_type<long long>(j, "kv_pool");
     if (pool < 0) throw std::runtime_error("config file: 'kv_pool' must be >= 0");
     c.kv_pool_bytes = static_cast<std::size_t>(pool);
+  }
+  if (j.contains("kv_spill_dir")) c.kv_spill_dir = require_type<std::string>(j, "kv_spill_dir");
+  if (j.contains("kv_spill_bytes")) {
+    long long spill = require_type<long long>(j, "kv_spill_bytes");
+    if (spill < 0) throw std::runtime_error("config file: 'kv_spill_bytes' must be >= 0");
+    c.kv_spill_bytes = static_cast<std::size_t>(spill);
   }
   return c;
 }
@@ -149,6 +155,9 @@ ServerConfig ServerConfig::parse(const std::vector<std::string>& args) {
   c.kv_block = static_cast<int>(env_long("MLXFORGE_KV_BLOCK", c.kv_block));
   c.kv_pool_bytes =
       static_cast<std::size_t>(env_long("MLXFORGE_KV_POOL", static_cast<long>(c.kv_pool_bytes)));
+  c.kv_spill_dir = env_or("MLXFORGE_KV_SPILL_DIR", c.kv_spill_dir);
+  c.kv_spill_bytes = static_cast<std::size_t>(
+      env_long("MLXFORGE_KV_SPILL_BYTES", static_cast<long>(c.kv_spill_bytes)));
 
   // Helper: extract value for a flag (accepts "--flag value" or "--flag=value")
   auto value_of = [&](const std::string& a, size_t& i) -> std::string {
@@ -187,6 +196,10 @@ ServerConfig ServerConfig::parse(const std::vector<std::string>& args) {
       c.kv_block = std::stoi(value_of(a, i));
     else if (flag == "--kv-pool")
       c.kv_pool_bytes = static_cast<std::size_t>(std::stoll(value_of(a, i)));
+    else if (flag == "--kv-spill-dir")
+      c.kv_spill_dir = value_of(a, i);
+    else if (flag == "--kv-spill-bytes")
+      c.kv_spill_bytes = static_cast<std::size_t>(std::stoll(value_of(a, i)));
     else
       throw std::runtime_error("unknown flag: " + flag);
   }

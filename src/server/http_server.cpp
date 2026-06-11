@@ -425,7 +425,9 @@ void HttpServer::setup_routes() {
          {{"hits", m.prefix_hits},
           {"tokens_reused", m.prefix_tokens_reused},
           {"pool_bytes", m.prefix_pool_bytes},
-          {"pool_blocks", m.prefix_pool_blocks}}},
+          {"pool_blocks", m.prefix_pool_blocks},
+          {"spill_writes", m.spill_writes},
+          {"spill_reads", m.spill_reads}}},
     };
     res.set_content(body.dump(), "application/json");
   });

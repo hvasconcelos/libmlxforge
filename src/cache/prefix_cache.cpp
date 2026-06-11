@@ -17,6 +17,13 @@ PrefixCache::Match PrefixCache::match(const std::vector<int>& ids) {
   for (int b = 0; b < n_full; ++b) {
     h = chain_hash(h, ids.data() + static_cast<std::size_t>(b) * bs, bs);
     std::shared_ptr<const KVBlock> blk = pool_.get(h);
+    if (!blk && on_miss_) {
+      blk = on_miss_(h);  // SSD tier
+      // Re-promote: the revived block is hot again. (A block bigger than the
+      // whole pool budget stays un-pooled; the shared_ptr still serves this
+      // match.)
+      if (blk) pool_.insert(h, blk);
+    }
     if (!blk) break;  // keys chain, so the first miss ends every longer match
     m.blocks.push_back(std::move(blk));
   }
