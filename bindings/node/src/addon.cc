@@ -274,6 +274,11 @@ class EngineWrap : public Napi::ObjectWrap<EngineWrap> {
       }
       if (o.Has("kvSpillBytes") && o.Get("kvSpillBytes").IsNumber())
         opts.kv_spill_bytes = o.Get("kvSpillBytes").As<Napi::Number>().Int64Value();
+      if (o.Has("prefillChunk") && o.Get("prefillChunk").IsNumber()) {
+        // JS 0 means "off"; the ABI uses 0 for "engine default", < 0 for off.
+        const int chunk = o.Get("prefillChunk").As<Napi::Number>().Int32Value();
+        opts.prefill_chunk = chunk <= 0 ? -1 : chunk;
+      }
     }
 
     char* err = nullptr;

@@ -10,6 +10,7 @@
 #pragma once
 
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -39,11 +40,12 @@ class Worker {
   // decoding; when null, grammar-constrained requests fall back to unconstrained.
   // `kv_quant` selects the decode cache's storage (dense fp16 by default) and
   // `prefix` the prefix-cache setting; the Engine validates both against the
-  // model before construction. Defined out-of-line (with the destructor)
-  // because the unique_ptr<VitEncoder> member needs the complete type for
-  // cleanup.
+  // model before construction. `prefill_chunk` is the interleaved-admission
+  // chunk size in tokens (0 = monolithic prefill, see below). Defined
+  // out-of-line (with the destructor) because the unique_ptr<VitEncoder>
+  // member needs the complete type for cleanup.
   Worker(ModelFactory factory, Scheduler* scheduler, const Tokenizer* tok = nullptr,
-         KVQuantConfig kv_quant = {}, PrefixCacheConfig prefix = {});
+         KVQuantConfig kv_quant = {}, PrefixCacheConfig prefix = {}, int prefill_chunk = 256);
   ~Worker();
 
   Worker(const Worker&) = delete;
@@ -86,20 +88,38 @@ class Worker {
   // push each row's token, marking finished rows.
   void decode_step();
 
-  // EXPERIMENTAL chunked-prefill interleaving (MLXFORGE_PREFILL_CHUNK > 0,
-  // prefix cache off): a cold admission's prefill advances one chunk per loop
-  // iteration with a decode step in between, so in-flight rows keep producing
-  // tokens during long or queued prefills instead of stalling completely.
-  // Off by default (0): admissions prefill monolithically, exactly as before.
+  // Chunked-prefill interleaving (prefill_chunk > 0, the default): an
+  // admission's prefill advances one chunk per loop iteration with a decode
+  // step in between, so in-flight rows keep producing tokens during long or
+  // queued prefills instead of stalling completely. Cold admissions share one
+  // batched unit; a prefix-cache hit becomes its own single-row unit whose
+  // cache is seeded from the pooled blocks and whose tokens are the uncached
+  // suffix. Units queue FIFO; while any is pending no new admissions are
+  // taken. At shutdown the loop keeps advancing until the queue drains, so
+  // pending requests complete rather than being orphaned. prefill_chunk = 0
+  // restores the monolithic admit() path.
   struct PendingPrefill {
     std::vector<std::shared_ptr<Request>> reqs;
-    mx::array tokens;  // (B, p_max) left-padded prompt ids
-    std::unique_ptr<BatchKVCache> cache;
-    int p_max = 0;
-    int pos = 0;  // prompt tokens consumed so far
+    mx::array tokens;  // cold: (B, p_max) left-padded prompts; warm: (1, suffix)
+    std::unique_ptr<BatchKVCache> cache;  // cold: fresh; warm: prefix-seeded
+    int n_total = 0;  // columns in `tokens`
+    int pos = 0;      // tokens consumed so far
+    long long reused_tokens = 0;  // > 0 marks a warm unit (prefix metrics on completion)
   };
-  void start_chunked_prefill(const std::vector<std::shared_ptr<Request>>& cold);
-  void advance_chunked_prefill();  // one chunk; merges + registers rows when done
+  void enqueue_admissions(const std::vector<std::shared_ptr<Request>>& incoming);
+  void advance_chunked_prefill();  // front unit, one chunk; registers rows when done
+
+  // Split `incoming` on the prefix cache: a request whose prompt matches pooled
+  // blocks (match.tokens > 0) is "warm" (prefill its suffix from a seeded cache),
+  // the rest are "cold" (batched cold prefill). Shared by admit() (the
+  // prefill_chunk = 0 path) and enqueue_admissions() (the chunked path) so the
+  // matching policy stays identical between them. With the prefix cache off,
+  // every request lands in `cold`.
+  struct PrefixSplit {
+    std::vector<std::shared_ptr<Request>> cold;
+    std::vector<std::pair<std::shared_ptr<Request>, PrefixCache::Match>> warm;
+  };
+  PrefixSplit split_prefix(const std::vector<std::shared_ptr<Request>>& incoming);
 
   // Result of sampling the active batch in one graph: the chosen tokens, plus —
   // for the rows that requested log-probs (params.top_logprobs >= 0) — their
@@ -171,9 +191,9 @@ class Worker {
   std::vector<std::vector<int>> history_;  // prompt+generated ids per row (penalties)
   std::vector<mx::array> rng_keys_;        // per-row RNG key, advanced each step
 
-  // Interleaved-prefill state (worker thread only; null when idle or feature off).
-  std::unique_ptr<PendingPrefill> pending_;
-  int prefill_chunk_ = 0;  // from MLXFORGE_PREFILL_CHUNK; 0 = monolithic admits
+  // Interleaved-prefill queue (worker thread only; empty when idle or feature off).
+  std::deque<PendingPrefill> pending_;
+  int prefill_chunk_;  // chunk size in tokens; 0 = monolithic admits
 
   std::atomic<long> decode_steps_{0};
   std::atomic<bool> ready_{false};

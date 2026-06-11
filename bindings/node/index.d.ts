@@ -31,6 +31,12 @@ export interface EngineOptions {
   kvSpillDir?: string;
   /** Spill-directory disk budget in bytes (0/unset = unbounded). */
   kvSpillBytes?: number;
+  /**
+   * Chunked-prefill interleaving: tokens prefilled per engine step, with a
+   * decode step in between so in-flight requests keep streaming during long
+   * or queued prefills. Default 256 (on); 0 = monolithic prefill (off).
+   */
+  prefillChunk?: number;
 }
 
 export interface SamplingOptions {

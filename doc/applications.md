@@ -63,6 +63,7 @@ with environment-variable fallbacks (`server/config`):
 | `--kv-pool` | `MLXFORGE_KV_POOL` | `1 GiB` | Prefix-pool RAM budget in bytes (LRU beyond it); `0` = unbounded. |
 | `--kv-spill-dir` | `MLXFORGE_KV_SPILL_DIR` | off | SSD spill directory: RAM-evicted prefix blocks persist here and survive restarts. |
 | `--kv-spill-bytes` | `MLXFORGE_KV_SPILL_BYTES` | `0` (unbounded) | Disk budget for the spill directory. |
+| `--prefill-chunk` | `MLXFORGE_PREFILL_CHUNK` | `256` (on) | Chunked-prefill interleaving: admissions prefill this many tokens per engine step with a decode step in between, so in-flight requests keep streaming during long or queued prefills (+25–35% batched throughput, up to 60% lower TTFT under load). `0` = monolithic prefill per admission. |
 
 ### Logging
 

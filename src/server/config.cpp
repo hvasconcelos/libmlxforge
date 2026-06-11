@@ -58,7 +58,8 @@ ServerConfig ServerConfig::from_file(const std::string& path) {
   // Reject unknown keys up front so typos (e.g. "prot") fail loudly.
   static const std::set<std::string> kKnownKeys = {
       "model",     "host",    "port",         "max_ctx",  "max_waiting",  "kv_budget",
-      "kv_bits",   "prefix_cache", "kv_block", "kv_pool", "kv_spill_dir", "kv_spill_bytes"};
+      "kv_bits",   "prefix_cache", "kv_block", "kv_pool", "kv_spill_dir", "kv_spill_bytes",
+      "prefill_chunk"};
   for (const auto& [key, _] : j.items()) {
     if (kKnownKeys.find(key) == kKnownKeys.end()) {
       throw std::runtime_error("config file: unknown key '" + key + "' in '" + path + "'");
@@ -107,6 +108,11 @@ ServerConfig ServerConfig::from_file(const std::string& path) {
     long long spill = require_type<long long>(j, "kv_spill_bytes");
     if (spill < 0) throw std::runtime_error("config file: 'kv_spill_bytes' must be >= 0");
     c.kv_spill_bytes = static_cast<std::size_t>(spill);
+  }
+  if (j.contains("prefill_chunk")) {
+    c.prefill_chunk = require_type<int>(j, "prefill_chunk");
+    if (c.prefill_chunk < 0)
+      throw std::runtime_error("config file: 'prefill_chunk' must be >= 0 (0 = monolithic)");
   }
   return c;
 }
@@ -158,6 +164,7 @@ ServerConfig ServerConfig::parse(const std::vector<std::string>& args) {
   c.kv_spill_dir = env_or("MLXFORGE_KV_SPILL_DIR", c.kv_spill_dir);
   c.kv_spill_bytes = static_cast<std::size_t>(
       env_long("MLXFORGE_KV_SPILL_BYTES", static_cast<long>(c.kv_spill_bytes)));
+  c.prefill_chunk = static_cast<int>(env_long("MLXFORGE_PREFILL_CHUNK", c.prefill_chunk));
 
   // Helper: extract value for a flag (accepts "--flag value" or "--flag=value")
   auto value_of = [&](const std::string& a, size_t& i) -> std::string {
@@ -200,11 +207,15 @@ ServerConfig ServerConfig::parse(const std::vector<std::string>& args) {
       c.kv_spill_dir = value_of(a, i);
     else if (flag == "--kv-spill-bytes")
       c.kv_spill_bytes = static_cast<std::size_t>(std::stoll(value_of(a, i)));
+    else if (flag == "--prefill-chunk")
+      c.prefill_chunk = std::stoi(value_of(a, i));
     else
       throw std::runtime_error("unknown flag: " + flag);
   }
   if (c.kv_bits != 0 && c.kv_bits != 4 && c.kv_bits != 8)
     throw std::runtime_error("--kv-bits must be 0, 4, or 8");
+  if (c.prefill_chunk < 0)
+    throw std::runtime_error("--prefill-chunk must be >= 0 (0 = monolithic)");
   return c;
 }
 

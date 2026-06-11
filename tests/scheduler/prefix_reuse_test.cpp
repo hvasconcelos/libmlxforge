@@ -123,3 +123,51 @@ TEST_CASE("prefix-cache reuse reproduces the cold greedy stream exactly") {
 
   worker.stop();
 }
+
+TEST_CASE("prefix reuse holds under chunked prefill (warm suffix spans chunks)") {
+  if (!model_available()) {
+    MESSAGE("MLXFORGE_MODEL_DIR not present; skipping");
+    return;
+  }
+  const std::string dir = model_dir();
+  mlxforge::ModelConfig cfg = mlxforge::ModelConfig::from_file(dir + "/config.json");
+  const int kMax = 16;
+
+  const std::vector<int> turn1 = long_prompt();
+  mlxforge::LlamaModel& solo = shared_model();
+  const std::vector<int> expect1 =
+      mlxforge::greedy_generate(solo, turn1, kMax, cfg.eos_token_ids).tokens;
+  std::vector<int> turn2 = turn1;
+  turn2.insert(turn2.end(), expect1.begin(), expect1.end());
+  const std::vector<int> extra = load_token_ids("prompt_0_ids.npy");
+  turn2.insert(turn2.end(), extra.begin(), extra.end());
+  const std::vector<int> expect2 =
+      mlxforge::greedy_generate(solo, turn2, kMax, cfg.eos_token_ids).tokens;
+
+  // prefill_chunk = 8 < block 16: both the cold prefill and the warm suffix
+  // (turn2 past its prefix hit) span multiple chunks. Reuse may only change
+  // speed, never tokens — same gate as the monolithic case above.
+  mlxforge::PrefixCacheConfig pcfg;
+  pcfg.enabled = true;
+  pcfg.block_size = 16;
+  pcfg.pool_bytes = 1ull << 30;
+  pcfg.salt = 7;
+  mlxforge::Scheduler sched;
+  mlxforge::Worker worker(
+      [dir] {
+        mlxforge::ModelConfig c = mlxforge::ModelConfig::from_file(dir + "/config.json");
+        auto w = mlxforge::load_weights(dir, c);
+        return std::make_unique<mlxforge::LlamaModel>(std::move(c), std::move(w));
+      },
+      &sched, /*tok=*/nullptr, /*kv_quant=*/{}, pcfg, /*prefill_chunk=*/8);
+  worker.start();
+
+  CHECK(run_one(sched, turn1, cfg.eos_token_ids, kMax) == expect1);  // cold
+  CHECK(worker.metrics().prefix_hits == 0);
+  CHECK(run_one(sched, turn1, cfg.eos_token_ids, kMax) == expect1);  // warm, identical
+  CHECK(run_one(sched, turn2, cfg.eos_token_ids, kMax) == expect2);  // warm, extended
+  CHECK(worker.metrics().prefix_hits == 2);
+  CHECK(worker.metrics().prefix_tokens_reused > 0);
+
+  worker.stop();
+}
