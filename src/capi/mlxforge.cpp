@@ -176,6 +176,9 @@ mlxforge_engine* mlxforge_engine_create2(const char* model_spec,
      * (256, on); negative explicitly disables (monolithic prefill). */
     if (covered(&opts->prefill_chunk + 1) && opts->prefill_chunk != 0)
       cfg.prefill_chunk = opts->prefill_chunk < 0 ? 0 : opts->prefill_chunk;
+    /* v9: multi-row GEMV decode kernels. Zero-init keeps the default (on). */
+    if (covered(&opts->skinny_mm + 1) && opts->skinny_mm != 0)
+      cfg.skinny_mm = opts->skinny_mm > 0;
 
     auto handle = std::make_unique<mlxforge_engine>();
     handle->model_name = model_spec;

@@ -51,6 +51,12 @@ struct EngineConfig {
   // benchmarked sweet spot); 0 = monolithic prefill per admission. Negative
   // values are rejected at construction.
   int prefill_chunk = 256;
+  // Multi-row GEMV decode kernels (model/skinny_matmul): dense fp16 matmuls of
+  // the batched-decode shape (B in [2, 16], L == 1) bypass MLX's tiled GEMM,
+  // which runs at a fraction of GEMV bandwidth there (ml-explore/mlx#3661).
+  // On by default; logits may differ from the stock kernel at fp16-noise scale
+  // (fp32 accumulation in a different order), token-equality gated in tests.
+  bool skinny_mm = true;
 };
 
 // Per-call embedding options. The two int fields are tri-state: -1 means "use

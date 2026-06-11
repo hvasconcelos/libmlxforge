@@ -59,7 +59,7 @@ ServerConfig ServerConfig::from_file(const std::string& path) {
   static const std::set<std::string> kKnownKeys = {
       "model",     "host",    "port",         "max_ctx",  "max_waiting",  "kv_budget",
       "kv_bits",   "prefix_cache", "kv_block", "kv_pool", "kv_spill_dir", "kv_spill_bytes",
-      "prefill_chunk"};
+      "prefill_chunk", "skinny_mm"};
   for (const auto& [key, _] : j.items()) {
     if (kKnownKeys.find(key) == kKnownKeys.end()) {
       throw std::runtime_error("config file: unknown key '" + key + "' in '" + path + "'");
@@ -114,6 +114,7 @@ ServerConfig ServerConfig::from_file(const std::string& path) {
     if (c.prefill_chunk < 0)
       throw std::runtime_error("config file: 'prefill_chunk' must be >= 0 (0 = monolithic)");
   }
+  if (j.contains("skinny_mm")) c.skinny_mm = require_type<bool>(j, "skinny_mm");
   return c;
 }
 
@@ -165,6 +166,7 @@ ServerConfig ServerConfig::parse(const std::vector<std::string>& args) {
   c.kv_spill_bytes = static_cast<std::size_t>(
       env_long("MLXFORGE_KV_SPILL_BYTES", static_cast<long>(c.kv_spill_bytes)));
   c.prefill_chunk = static_cast<int>(env_long("MLXFORGE_PREFILL_CHUNK", c.prefill_chunk));
+  c.skinny_mm = env_long("MLXFORGE_SKINNY_MM", c.skinny_mm ? 1 : 0) != 0;
 
   // Helper: extract value for a flag (accepts "--flag value" or "--flag=value")
   auto value_of = [&](const std::string& a, size_t& i) -> std::string {
@@ -209,6 +211,8 @@ ServerConfig ServerConfig::parse(const std::vector<std::string>& args) {
       c.kv_spill_bytes = static_cast<std::size_t>(std::stoll(value_of(a, i)));
     else if (flag == "--prefill-chunk")
       c.prefill_chunk = std::stoi(value_of(a, i));
+    else if (flag == "--skinny-mm")
+      c.skinny_mm = std::stoi(value_of(a, i)) != 0;
     else
       throw std::runtime_error("unknown flag: " + flag);
   }

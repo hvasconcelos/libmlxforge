@@ -186,7 +186,7 @@ Engine::Engine(EngineConfig cfg, Loaded loaded)
       // cfg_ is initialized above, so the KV-quant validation sees the model.
       worker_(make_factory(std::move(loaded.dir), loaded.is_gguf), &scheduler_, &tok_,
               validate_kv_quant(cfg, cfg_), validate_prefix_cache(cfg, cfg_, model_name_),
-              validate_prefill_chunk(cfg)) {
+              validate_prefill_chunk(cfg), cfg.skinny_mm) {
   // Configure the max waiting requests for the batch scheduler.
   scheduler_.set_max_waiting(cfg.max_waiting);
 

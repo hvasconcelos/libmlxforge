@@ -64,6 +64,7 @@ with environment-variable fallbacks (`server/config`):
 | `--kv-spill-dir` | `MLXFORGE_KV_SPILL_DIR` | off | SSD spill directory: RAM-evicted prefix blocks persist here and survive restarts. |
 | `--kv-spill-bytes` | `MLXFORGE_KV_SPILL_BYTES` | `0` (unbounded) | Disk budget for the spill directory. |
 | `--prefill-chunk` | `MLXFORGE_PREFILL_CHUNK` | `256` (on) | Chunked-prefill interleaving: admissions prefill this many tokens per engine step with a decode step in between, so in-flight requests keep streaming during long or queued prefills (+25–35% batched throughput, up to 60% lower TTFT under load). `0` = monolithic prefill per admission. |
+| `--skinny-mm` | `MLXFORGE_SKINNY_MM` | `1` (on) | Multi-row GEMV decode kernels: dense fp16 matmuls of the batched-decode shape (2–16 rows) bypass MLX's tiled GEMM, which runs at a fraction of GEMV bandwidth there ([mlx#3661](https://github.com/ml-explore/mlx/issues/3661)) — roughly 2× per-row decode throughput at small batch sizes. |
 
 ### Logging
 

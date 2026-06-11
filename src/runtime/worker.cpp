@@ -59,9 +59,10 @@ bool consume(Request& req, int& produced, int id, const TokenLogprob* lp) {
 }  // namespace
 
 Worker::Worker(ModelFactory factory, Scheduler* scheduler, const Tokenizer* tok,
-               KVQuantConfig kv_quant, PrefixCacheConfig prefix, int prefill_chunk)
+               KVQuantConfig kv_quant, PrefixCacheConfig prefix, int prefill_chunk,
+               bool skinny_mm)
     : factory_(std::move(factory)), sched_(scheduler), tok_(tok), kv_quant_(kv_quant),
-      prefix_cfg_(prefix), prefill_chunk_(prefill_chunk) {}
+      prefix_cfg_(prefix), prefill_chunk_(prefill_chunk), skinny_mm_(skinny_mm) {}
 
 Worker::~Worker() { stop(); }
 
@@ -195,6 +196,7 @@ void Worker::stop() {
 void Worker::run() {
   log::info("worker: loading model...");
   model_ = factory_();  // load the model on this thread so its arrays live here
+  model_->set_skinny_mm(skinny_mm_);  // batched-decode GEMV kernels (engine option)
   // The prefix pool holds MLX arrays, so it lives (and dies) with this thread.
   if (prefix_cfg_.enabled) {
     prefix_ = std::make_unique<PrefixCache>(prefix_cfg_);

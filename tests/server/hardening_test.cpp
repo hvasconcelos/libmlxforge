@@ -61,6 +61,14 @@ TEST_CASE("ServerConfig parses prefill_chunk (flag, file, validation)") {
                   std::runtime_error);
 }
 
+TEST_CASE("ServerConfig parses skinny_mm (flag, file)") {
+  CHECK(ServerConfig::parse({"-m", "/m"}).skinny_mm == true);  // default on
+  CHECK(ServerConfig::parse({"-m", "/m", "--skinny-mm", "0"}).skinny_mm == false);
+  CHECK(ServerConfig::parse({"-m", "/m", "--skinny-mm=1"}).skinny_mm == true);
+  CHECK(ServerConfig::parse({"-c", write_temp_config(R"({"skinny_mm": false})")})
+            .skinny_mm == false);
+}
+
 TEST_CASE("ServerConfig rejects unknown and positional args") {
   CHECK_THROWS_AS(ServerConfig::parse({"-m", "/m", "--bogus", "x"}), std::runtime_error);
   CHECK_THROWS_AS(ServerConfig::parse({"-m"}), std::runtime_error);    // missing value

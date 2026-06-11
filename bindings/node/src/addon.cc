@@ -279,6 +279,8 @@ class EngineWrap : public Napi::ObjectWrap<EngineWrap> {
         const int chunk = o.Get("prefillChunk").As<Napi::Number>().Int32Value();
         opts.prefill_chunk = chunk <= 0 ? -1 : chunk;
       }
+      if (o.Has("skinnyMm") && o.Get("skinnyMm").IsBoolean())
+        opts.skinny_mm = o.Get("skinnyMm").As<Napi::Boolean>().Value() ? 1 : -1;
     }
 
     char* err = nullptr;

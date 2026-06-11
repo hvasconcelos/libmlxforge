@@ -105,3 +105,57 @@ TEST_CASE("chunked prefill reproduces the reference greedy stream across chunk s
     worker.stop();
   }
 }
+
+TEST_CASE("skinny_mm decode kernels reproduce the stock-matmul greedy stream") {
+  if (!model_available()) {
+    MESSAGE("MLXFORGE_MODEL_DIR not present; skipping");
+    return;
+  }
+  const std::string dir = model_dir();
+  mlxforge::ModelConfig cfg = mlxforge::ModelConfig::from_file(dir + "/config.json");
+
+  std::vector<int> prompt;
+  for (const char* name : {"prompt_0_ids.npy", "prompt_1_ids.npy", "prompt_2_ids.npy"}) {
+    std::vector<int> ids = load_token_ids(name);
+    prompt.insert(prompt.end(), ids.begin(), ids.end());
+  }
+  const int kMax = 16;
+  const int kBatch = 4;  // decode at B=4 routes every linear through the kernels
+
+  // Reuse may only change speed, never tokens: the kernel-on batch must match
+  // the kernel-off batch row for row (both greedy on identical prompts).
+  std::vector<std::vector<int>> streams[2];
+  for (bool skinny : {false, true}) {
+    mlxforge::Scheduler sched;
+    mlxforge::Worker worker(
+        [dir] {
+          mlxforge::ModelConfig c = mlxforge::ModelConfig::from_file(dir + "/config.json");
+          auto w = mlxforge::load_weights(dir, c);
+          return std::make_unique<mlxforge::LlamaModel>(std::move(c), std::move(w));
+        },
+        &sched, /*tok=*/nullptr, /*kv_quant=*/{}, /*prefix=*/{}, /*prefill_chunk=*/256, skinny);
+    worker.start();
+
+    std::vector<std::shared_ptr<mlxforge::Request>> reqs;
+    for (int i = 0; i < kBatch; ++i) {
+      auto r = std::make_shared<mlxforge::Request>();
+      r->prompt_ids = prompt;
+      r->params.temperature = 0.0f;
+      r->max_tokens = kMax;
+      r->eos_ids = cfg.eos_token_ids;
+      REQUIRE(sched.submit(r));
+      reqs.push_back(std::move(r));
+    }
+    for (const auto& r : reqs) {
+      std::vector<int> got;
+      int tok = 0;
+      while (r->tokens.pop(tok)) got.push_back(tok);
+      streams[skinny].push_back(std::move(got));
+    }
+    worker.stop();
+  }
+  for (int i = 0; i < kBatch; ++i) {
+    CAPTURE(i);
+    assert_tokens_equal(streams[1][i], streams[0][i]);
+  }
+}
