@@ -1,11 +1,18 @@
 name: CI
 
-# Build the engine and run the test suite on every PR targeting master or develop.
+# Build the engine and run the test suite on every PR targeting master or develop,
+# and on every push to master. The master runs exist for the dependency cache:
+# GitHub scopes caches saved by a PR branch to that branch alone, so without a
+# master-saved cache every new PR starts with a cold MLX build (~1.5-2h on the
+# small runner) — which is exactly what the run history showed before this.
 # mlxforge is Apple Silicon only (MLX Metal backend), so this runs on GitHub's
 # ARM64 macOS runners. The integration tests self-skip when the model isn't
 # present, so we don't download weights here — only the pure-logic units and the
 # golden-reference fixtures (committed under reference/fixtures/) are exercised.
 on:
+  push:
+    branches:
+      - master
   pull_request:
     branches:
       - master
@@ -21,11 +28,11 @@ jobs:
     name: Build & test (Apple Silicon)
     runs-on: macos-15  # ARM64 Apple Silicon runner — required for the Metal backend
     # The GitHub macos-15 arm64 runner is only 3 vCPU / 7GB, so a *cold* build
-    # (compiling MLX's Metal kernels from scratch) can take ~an hour. The cache
-    # below makes every later run fast, but the cache is only written when a run
-    # finishes — so the first run must be allowed to complete. Hence the generous
-    # timeout; subsequent cache-warm runs finish in a few minutes.
-    timeout-minutes: 120
+    # (compiling MLX's Metal kernels from scratch) takes 1.5-2h — one run hit the
+    # old 2h limit on a slow runner. The cache below makes cache-warm runs finish
+    # in minutes, but the cache is only written when a run completes, so cold
+    # runs must be allowed to finish. Hence the generous timeout.
+    timeout-minutes: 200
     steps:
       - name: Checkout
         uses: actions/checkout@v4
