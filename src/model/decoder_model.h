@@ -99,6 +99,13 @@ class DecoderModel {
   // 0 where a key is causally valid and not left-padding, -inf otherwise.
   mx::array batch_mask(int prev_idx, int n_query, const mx::array& left_padding) const;
 
+  // Enable the multi-row GEMV decode kernels (model/skinny_matmul): linear()
+  // routes dense fp16 matmuls of the batched-decode shape (B in [2, 16],
+  // L == 1) through them instead of MLX's tiled GEMM. Off by default so raw
+  // models (single-stream tools, golden references) keep stock numerics; the
+  // Worker turns it on per EngineConfig::skinny_mm after loading.
+  void set_skinny_mm(bool on) { skinny_mm_ = on; }
+
  protected:
   // Abstract base: construct a concrete subclass (or via create_model()).
   DecoderModel(ModelConfig config, Weights weights);
@@ -131,6 +138,7 @@ class DecoderModel {
   ModelConfig cfg_;
   Weights w_;
   mx::array rope_freqs_;
+  bool skinny_mm_ = false;  // see set_skinny_mm()
 };
 
 }  // namespace mlxforge

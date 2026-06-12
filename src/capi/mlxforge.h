@@ -48,8 +48,10 @@ extern "C" {
  *       kv_pool_bytes, kv_spill_dir, kv_spill_bytes) — appended, struct_size-
  *       gated; no new symbols.
  *   v8: mlxforge_engine_opts2.prefill_chunk (chunked-prefill interleaving,
+ *       default-on) — appended, struct_size-gated; no new symbols.
+ *   v9: mlxforge_engine_opts2.skinny_mm (multi-row GEMV decode kernels,
  *       default-on) — appended, struct_size-gated; no new symbols. */
-#define MLXFORGE_ABI_VERSION 8
+#define MLXFORGE_ABI_VERSION 9
 
 typedef struct mlxforge_engine mlxforge_engine;
 typedef struct mlxforge_request mlxforge_request;
@@ -143,7 +145,14 @@ mlxforge_engine* mlxforge_engine_create(const char* model_spec,
  * this many tokens per worker iteration with a decode step in between, so
  * in-flight requests keep streaming during long or queued prefills. On by
  * default (256). 0 keeps the default; < 0 disables it (monolithic prefill
- * per admission, the pre-v8 behavior). */
+ * per admission, the pre-v8 behavior).
+ *
+ * skinny_mm (v9+) toggles the multi-row GEMV decode kernels: dense fp16
+ * matmuls of the batched-decode shape (2-16 rows, one token each) bypass
+ * MLX's tiled GEMM, which runs at a fraction of GEMV bandwidth there
+ * (ml-explore/mlx#3661) — roughly 2x per-row decode throughput at small
+ * batch sizes. On by default. 0 keeps the default; < 0 disables (stock
+ * matmul); > 0 enables. */
 typedef struct {
   size_t struct_size;   /* caller sets sizeof(mlxforge_engine_opts2) */
   int max_waiting;      /* max queued requests; <= 0 => default (256) */
@@ -158,6 +167,9 @@ typedef struct {
   /* ---- v8 ---- */
   int prefill_chunk;         /* tokens per interleaved prefill chunk; 0 => default
                                 (256); < 0 => monolithic prefill (off) */
+  /* ---- v9 ---- */
+  int skinny_mm;             /* multi-row GEMV decode kernels; 0 => default (on);
+                                < 0 => off (stock matmul); > 0 => on */
 } mlxforge_engine_opts2;
 
 /* Create an engine with extended options (v6+). Identical contract to

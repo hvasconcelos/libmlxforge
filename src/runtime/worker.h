@@ -41,11 +41,14 @@ class Worker {
   // `kv_quant` selects the decode cache's storage (dense fp16 by default) and
   // `prefix` the prefix-cache setting; the Engine validates both against the
   // model before construction. `prefill_chunk` is the interleaved-admission
-  // chunk size in tokens (0 = monolithic prefill, see below). Defined
+  // chunk size in tokens (0 = monolithic prefill, see below). `skinny_mm`
+  // routes batched-decode dense matmuls through the multi-row GEMV kernels
+  // (model/skinny_matmul; applied to the model after it loads). Defined
   // out-of-line (with the destructor) because the unique_ptr<VitEncoder>
   // member needs the complete type for cleanup.
   Worker(ModelFactory factory, Scheduler* scheduler, const Tokenizer* tok = nullptr,
-         KVQuantConfig kv_quant = {}, PrefixCacheConfig prefix = {}, int prefill_chunk = 256);
+         KVQuantConfig kv_quant = {}, PrefixCacheConfig prefix = {}, int prefill_chunk = 256,
+         bool skinny_mm = true);
   ~Worker();
 
   Worker(const Worker&) = delete;
@@ -193,7 +196,8 @@ class Worker {
 
   // Interleaved-prefill queue (worker thread only; empty when idle or feature off).
   std::deque<PendingPrefill> pending_;
-  int prefill_chunk_;  // chunk size in tokens; 0 = monolithic admits
+  int prefill_chunk_;   // chunk size in tokens; 0 = monolithic admits
+  bool skinny_mm_;      // multi-row GEMV decode kernels (set on the model post-load)
 
   std::atomic<long> decode_steps_{0};
   std::atomic<bool> ready_{false};

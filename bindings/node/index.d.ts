@@ -37,6 +37,12 @@ export interface EngineOptions {
    * or queued prefills. Default 256 (on); 0 = monolithic prefill (off).
    */
   prefillChunk?: number;
+  /**
+   * Multi-row GEMV decode kernels: small batched-decode matmuls (2-16 rows)
+   * bypass MLX's tiled GEMM, roughly doubling per-row decode throughput at
+   * small batch sizes. Default true.
+   */
+  skinnyMm?: boolean;
 }
 
 export interface SamplingOptions {

@@ -8,6 +8,7 @@
 
 #include "core/logging.h"
 #include "model/sdpa.h"
+#include "model/skinny_matmul.h"
 
 #include "mlx/fast.h"
 #include "mlx/ops.h"
@@ -121,7 +122,12 @@ mx::array DecoderModel::linear(const mx::array& x, const std::string& weight_key
                                 w_.at(base + ".biases"), /*transpose=*/true, qp.group_size,
                                 qp.bits);
   }
-  return mx::matmul(x, mx::transpose(w_.at(weight_key)));  // weight is (out, in)
+  const mx::array& w = w_.at(weight_key);
+  // The batched-decode shape (B in [2, 16], L == 1) takes the multi-row GEMV
+  // kernels when enabled — MLX's tiled GEMM runs at a fraction of GEMV
+  // bandwidth there (mlx#3661). See set_skinny_mm().
+  if (skinny_mm_ && skinny_matmul_applies(x, w)) return skinny_matmul(x, w);
+  return mx::matmul(x, mx::transpose(w));  // weight is (out, in)
 }
 
 mx::array DecoderModel::embed(const mx::array& tokens) const {

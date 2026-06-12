@@ -388,3 +388,40 @@ TEST_CASE("C ABI v8 prefill_chunk: chunked and monolithic engines agree") {
   CHECK(run_with_chunk(8) == monolithic);   // aggressive chunking
   CHECK(run_with_chunk(0) == monolithic);   // the default (256, on)
 }
+
+TEST_CASE("C ABI v9 skinny_mm: kernel-on and stock-matmul engines agree") {
+  if (!model_available()) {
+    MESSAGE("MLXFORGE_MODEL_DIR not present; skipping");
+    return;
+  }
+  const char* prompt =
+      "Once upon a time in a quiet village by the sea, a young engineer set out "
+      "to write a Metal kernel that read every weight row exactly once. Describe "
+      "what it computed first.";
+  mlxforge_sampling s = {};
+  s.max_tokens = 12;
+
+  // Two concurrent submissions put the decode batch at B=2 — the kernel shape.
+  auto run_with = [&](int skinny) {
+    char* err = nullptr;
+    mlxforge_engine_opts2 opts = {};
+    opts.struct_size = sizeof(opts);
+    opts.skinny_mm = skinny;  // 0 => default (on); < 0 => stock matmul
+    mlxforge_engine* eng = mlxforge_engine_create2(model_dir().c_str(), &opts, &err);
+    REQUIRE_MESSAGE(eng != nullptr, (err ? err : "engine_create2 failed"));
+    mlxforge_request* a = mlxforge_submit_text(eng, prompt, &s, &err);
+    REQUIRE_MESSAGE(a != nullptr, (err ? err : "submit failed"));
+    mlxforge_request* b = mlxforge_submit_text(eng, prompt, &s, &err);
+    REQUIRE_MESSAGE(b != nullptr, (err ? err : "submit failed"));
+    const std::string out = drain(a) + "\n---\n" + drain(b);
+    mlxforge_request_free(a);
+    mlxforge_request_free(b);
+    mlxforge_engine_free(eng);
+    return out;
+  };
+
+  const std::string stock = run_with(-1);
+  CHECK(stock.size() > 5);
+  CHECK(run_with(1) == stock);  // explicit on
+  CHECK(run_with(0) == stock);  // the default (on)
+}

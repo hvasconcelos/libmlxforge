@@ -57,6 +57,7 @@ add_library(mlxforge_core STATIC
   src/core/model_source.cpp
   src/model/decoder_model.cpp
   src/model/sdpa.cpp
+  src/model/skinny_matmul.cpp
   src/model/qwen3.cpp
   src/model/qwen3_moe.cpp
   src/model/qwen3_5.cpp
