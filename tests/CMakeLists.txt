@@ -51,6 +51,9 @@ add_executable(mlxforge_tests
   tokenizer/bpe_test.cpp
   tokenizer/spm_test.cpp
   model/quantized_test.cpp
+  inspect/safetensors_header_test.cpp
+  inspect/model_schema_test.cpp
+  inspect/schematic_html_test.cpp
   # The C ABI is compiled directly into the test binary (it is otherwise only in
   # the shared library), so capi_test can drive the engine through mlxforge.h.
   ${CMAKE_SOURCE_DIR}/src/capi/mlxforge.cpp

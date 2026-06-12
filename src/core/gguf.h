@@ -52,4 +52,38 @@ GgufModel load_gguf_model(const std::string& gguf_path);
 // server uses it on the main thread while the worker loads the weights.
 GgufModel load_gguf_config_and_tokenizer(const std::string& gguf_path);
 
+// ----- Metadata-only tensor inspection (CLI `schematic`) --------------------
+// The tensor-info section of a GGUF file carries every tensor's name, ggml
+// type, dims and data offset; reading it costs a header parse, not a weight
+// load. inspect_gguf exposes that directory (plus the config/tokenizer head)
+// for model-introspection tooling, creating no MLX arrays.
+
+struct GgufTensorMeta {
+  std::string name;            // raw ggml name ("blk.0.attn_q.weight")
+  std::string canonical;       // remapped HF key; "" if unrecognized/dropped
+  uint32_t ggml_type = 0;
+  std::vector<int64_t> shape;  // MLX order (ggml dims reversed); LOGICAL dims
+  uint64_t bytes = 0;          // on-disk bytes, derived from the data offsets
+};
+
+struct GgufInspection {
+  GgufModel head;                      // config + tokenizer material, no weights
+  std::vector<GgufTensorMeta> tensors;
+  uint64_t file_bytes = 0;
+};
+
+// Parse the metadata + tensor directory of a GGUF file. Creates no MLX arrays,
+// so it is safe to call on any thread. Throws like load_gguf_config_and_tokenizer
+// on an unsupported architecture or a malformed file.
+GgufInspection inspect_gguf(const std::string& gguf_path);
+
+// Display name for a ggml tensor type id ("Q4_K", "F16", ...); "type_<id>" for
+// an id this build does not know.
+std::string ggml_type_name(uint32_t t);
+
+// Effective bits per weight for a ggml tensor type, including the per-block
+// scale/min overhead (e.g. Q4_0 = 4.5: 18 bytes per 32 weights); 0 if unknown.
+// Display/estimation only — exact byte counts come from the data offsets.
+double ggml_bits_per_weight(uint32_t t);
+
 }  // namespace mlxforge

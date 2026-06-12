@@ -228,6 +228,90 @@ TEST_CASE("GGUF loader rejects Qwen3.5/qwen3next as unsupported") {
   std::remove(path.c_str());
 }
 
+TEST_CASE("GGUF inspect_gguf exposes the tensor directory without loading weights") {
+  // Hand-craft a tiny llama GGUF with one F16 tensor and one tensor of an
+  // unknown ggml type. inspect_gguf must report both (the unknown type is shown,
+  // not rejected — only loading needs to dequantize) with exact offset-derived
+  // byte counts.
+  constexpr uint32_t kF16 = 1;
+  constexpr uint32_t kUnknownType = 99;
+  constexpr uint64_t kAlign = 32;
+
+  std::string kv;
+  uint64_t nkv = 0;
+  auto kv_str = [&](const std::string& k, const std::string& v) {
+    put_str(kv, k); put<uint32_t>(kv, 8); put_str(kv, v); ++nkv;
+  };
+  auto kv_u32 = [&](const std::string& k, uint32_t v) {
+    put_str(kv, k); put<uint32_t>(kv, 4); put<uint32_t>(kv, v); ++nkv;
+  };
+  auto kv_f32 = [&](const std::string& k, float v) {
+    put_str(kv, k); put<uint32_t>(kv, 6); put<float>(kv, v); ++nkv;
+  };
+  kv_str("general.architecture", "llama");
+  kv_u32("llama.block_count", 1);
+  kv_u32("llama.embedding_length", 8);
+  kv_u32("llama.attention.head_count", 2);
+  kv_f32("llama.attention.layer_norm_rms_epsilon", 1e-5f);
+
+  // token_embd: F16 ne {8, 4} -> MLX shape (4, 8), 64 data bytes (aligned).
+  // blk.0.attn_q: unknown type, 50 data bytes padded to 64.
+  std::string tinfo;
+  put_str(tinfo, "token_embd.weight");
+  put<uint32_t>(tinfo, 2);
+  put<uint64_t>(tinfo, 8);
+  put<uint64_t>(tinfo, 4);
+  put<uint32_t>(tinfo, kF16);
+  put<uint64_t>(tinfo, 0);
+  put_str(tinfo, "blk.0.attn_q.weight");
+  put<uint32_t>(tinfo, 2);
+  put<uint64_t>(tinfo, 8);
+  put<uint64_t>(tinfo, 8);
+  put<uint32_t>(tinfo, kUnknownType);
+  put<uint64_t>(tinfo, 64);
+
+  std::string b;
+  put<uint32_t>(b, 0x46554747);  // "GGUF"
+  put<uint32_t>(b, 3);           // version
+  put<uint64_t>(b, 2);           // tensor count
+  put<uint64_t>(b, nkv);
+  b += kv;
+  b += tinfo;
+  b.append((kAlign - (b.size() % kAlign)) % kAlign, '\0');  // align to data_start
+  b.append(64, '\0');  // token_embd data
+  b.append(64, '\0');  // attn_q data (50 used, padded)
+
+  const std::string path =
+      (std::filesystem::temp_directory_path() / "mlxforge_inspect.gguf").string();
+  { std::ofstream(path, std::ios::binary).write(b.data(), b.size()); }
+
+  mlxforge::GgufInspection insp = mlxforge::inspect_gguf(path);
+  std::remove(path.c_str());
+
+  CHECK(insp.head.config.model_type == "llama");
+  CHECK(insp.head.config.n_layers == 1);
+  CHECK(insp.file_bytes == b.size());
+  REQUIRE(insp.tensors.size() == 2);
+
+  const auto& embd = insp.tensors[0];
+  CHECK(embd.name == "token_embd.weight");
+  CHECK(embd.canonical == "model.embed_tokens.weight");
+  CHECK(embd.shape == std::vector<int64_t>{4, 8});  // ggml ne reversed
+  CHECK(embd.ggml_type == kF16);
+  CHECK(embd.bytes == 64);
+
+  const auto& q = insp.tensors[1];
+  CHECK(q.canonical == "model.layers.0.self_attn.q_proj.weight");
+  CHECK(q.ggml_type == kUnknownType);
+  CHECK(q.bytes == 64);  // runs to end-of-file
+
+  CHECK(mlxforge::ggml_type_name(12) == "Q4_K");
+  CHECK(mlxforge::ggml_type_name(1) == "F16");
+  CHECK(mlxforge::ggml_type_name(kUnknownType) == "type_99");
+  CHECK(mlxforge::ggml_bits_per_weight(2) == doctest::Approx(4.5));
+  CHECK(mlxforge::ggml_bits_per_weight(kUnknownType) == 0.0);
+}
+
 TEST_CASE("GGUF forward pass produces the golden first token") {
   if (!gguf_available()) {
     MESSAGE("MLXFORGE_GGUF_MODEL not present; skipping");
