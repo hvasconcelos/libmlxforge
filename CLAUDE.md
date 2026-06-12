@@ -143,10 +143,21 @@ reference/.venv/bin/python reference/dump_ref.py
   still-unimplemented families (e.g. Unigram/WordPiece).
 - **Masks are additive fp16, never boolean** (avoids MLX bug #2894). See
   `DecoderModel::batch_mask`.
-- **RoPE is llama3-scaled** — `compute_rope_freqs` mirrors `mlx_lm`'s
-  `Llama3RoPE` exactly and feeds `fast::rope` via `freqs` (base disabled). It's
-  validated against `reference/fixtures/rope_freqs.npy`; don't "simplify" the
-  math.
+- **RoPE scaling is precomputed and validated, never silent** —
+  `compute_rope_setup` mirrors `mlx_lm` exactly (`Llama3RoPE`, `YarnRoPE`,
+  `nn.RoPE(scale=1/factor)` for linear) and feeds `fast::rope` via `freqs`
+  (base disabled); gated against `reference/fixtures/rope_freqs.npy` and
+  `reference/fixtures_qwen3_yarn/` — don't "simplify" the math. Two conventions
+  matter: yarn's attention **mscale multiplies the rope *input*** (both Q and
+  K, so logits scale by mscale² and the KV cache stores scaled K, exactly like
+  mlx-lm — folding it into the SDPA scale instead would desync the
+  q_rope0/k_rope0 fixtures), and **unknown `rope_type`s are rejected at load**
+  (`validate_rope_scaling`, run on the engine's caller thread — the worker
+  thread can't throw) rather than falling back to unscaled RoPE. The
+  engine-level override (`EngineConfig::rope_scaling`, ABI v10) fully replaces
+  the checkpoint's config and is re-applied inside `make_factory` on the
+  worker thread; keep the two applications identical or the factory can throw
+  where it must not.
 - **Decode-with-cache vs full-recompute logits differ by fp16 accumulation
   order** — compare argmax / exact tokens, not raw logits at tight tolerance.
 - **Quantized KV (kv_bits 8|4) mirrors mlx-lm's QuantizedKVCache** — triplet

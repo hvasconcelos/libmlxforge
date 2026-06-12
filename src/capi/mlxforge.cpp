@@ -179,6 +179,9 @@ mlxforge_engine* mlxforge_engine_create2(const char* model_spec,
     /* v9: multi-row GEMV decode kernels. Zero-init keeps the default (on). */
     if (covered(&opts->skinny_mm + 1) && opts->skinny_mm != 0)
       cfg.skinny_mm = opts->skinny_mm > 0;
+    /* v10: RoPE-scaling JSON override. NULL/empty keeps the checkpoint's config. */
+    if (covered(&opts->rope_scaling + 1) && opts->rope_scaling && *opts->rope_scaling)
+      cfg.rope_scaling = opts->rope_scaling;
 
     auto handle = std::make_unique<mlxforge_engine>();
     handle->model_name = model_spec;

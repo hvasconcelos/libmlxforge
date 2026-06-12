@@ -20,11 +20,26 @@ namespace {
 
 constexpr float kTwoPi = 6.283185307179586f;
 
-// Precompute RoPE frequencies. For Llama-3.2 (rope_type "llama3") this applies
-// the frequency rescaling that mlx_lm's Llama3RoPE precomputes and hands to
-// fast::rope via `freqs` (with base disabled). Plain models fall back to the
-// standard base**(2i/d) schedule. Returns head_dim/2 float32 values.
-mx::array compute_rope_freqs(const ModelConfig& cfg) {
+// YaRN attention-scale coefficient. Mirrors mlx_lm's yarn_get_mscale.
+float yarn_get_mscale(float scale, float mscale) {
+  if (scale <= 1.0f) return 1.0f;
+  return 0.1f * mscale * std::log(scale) + 1.0f;
+}
+
+}  // namespace
+
+// Precompute the RoPE frequency schedule + YaRN mscale. For Llama-3.2
+// (rope_type "llama3") this applies the frequency rescaling that mlx_lm's
+// Llama3RoPE precomputes and hands to fast::rope via `freqs` (with base
+// disabled); "yarn" and "linear" mirror mlx_lm's YarnRoPE / nn.RoPE(scale=
+// 1/factor) the same way. Plain models fall back to the standard base**(2i/d)
+// schedule. freqs is head_dim/2 float32 values.
+RopeSetup compute_rope_setup(const ModelConfig& cfg) {
+  // Defense-in-depth: the engine validates on the caller thread before model
+  // construction (a worker-thread throw would terminate); this catches direct
+  // construction paths (tests, CLI).
+  validate_rope_scaling(cfg);
+
   const int hd = cfg.head_dim;
   const float base = cfg.rope_theta;
 
@@ -42,12 +57,60 @@ mx::array compute_rope_freqs(const ModelConfig& cfg) {
                                   {static_cast<int>(cfg.rope_freq_factors->size())}, mx::float32);
     freqs = mx::multiply(freqs, factors);
     mx::eval(freqs);
-    return freqs;
+    return {freqs, 1.0f};
   }
 
-  if (!cfg.rope_scaling || cfg.rope_scaling->rope_type != "llama3") {
+  const std::string type = cfg.rope_scaling ? cfg.rope_scaling->rope_type : std::string{};
+
+  if (type == "linear") {
+    // mlx_lm uses nn.RoPE(scale=1/factor); fast::rope divides positions by
+    // freqs, so scaling positions by 1/factor equals scaling freqs by factor.
+    freqs = mx::multiply(freqs, mx::array(cfg.rope_scaling->factor));
     mx::eval(freqs);
-    return freqs;
+    return {freqs, 1.0f};
+  }
+
+  if (type == "yarn") {
+    // Exact mirror of mlx_lm's YarnRoPE.__init__ (validated against the
+    // fixtures_qwen3_yarn golden freqs): blend interpolated (freqs * factor)
+    // and extrapolated (unscaled) frequencies with a linear ramp between the
+    // beta_fast/beta_slow correction dims.
+    const RopeScaling& rs = *cfg.rope_scaling;
+    const double orig = static_cast<double>(rs.original_max_position_embeddings);
+    const double log_base = std::log(static_cast<double>(base));
+    auto correction_dim = [&](float num_rotations) {
+      return hd * std::log(orig / (num_rotations * static_cast<double>(kTwoPi))) /
+             (2.0 * log_base);
+    };
+    double low = std::max(std::floor(correction_dim(rs.beta_fast)), 0.0);
+    double high = std::min(std::ceil(correction_dim(rs.beta_slow)), static_cast<double>(hd - 1));
+    if (low == high) high += 0.001;  // singularity guard (mlx_lm yarn_linear_ramp_mask)
+
+    // freq_mask = 1 - clip((arange(hd/2) - low) / (high - low), 0, 1)
+    mx::array dim_idx = mx::arange(0, hd / 2, 1, mx::float32);
+    mx::array ramp = mx::clip(
+        mx::divide(mx::subtract(dim_idx, mx::array(static_cast<float>(low))),
+                   mx::array(static_cast<float>(high - low))),
+        mx::array(0.0f), mx::array(1.0f));
+    mx::array freq_mask = mx::subtract(mx::array(1.0f), ramp);
+
+    // freqs = (inter * extra) / (inter * mask + extra * (1 - mask)),
+    // inter = factor * extra: unscaled where mask==1, interpolated where mask==0.
+    mx::array freq_extra = freqs;
+    mx::array freq_inter = mx::multiply(mx::array(rs.factor), freq_extra);
+    mx::array denom = mx::add(mx::multiply(freq_inter, freq_mask),
+                              mx::multiply(freq_extra, mx::subtract(mx::array(1.0f), freq_mask)));
+    freqs = mx::divide(mx::multiply(freq_inter, freq_extra), denom);
+    mx::eval(freqs);
+
+    const float mscale =
+        yarn_get_mscale(rs.factor, rs.mscale) / yarn_get_mscale(rs.factor, rs.mscale_all_dim);
+    return {freqs, mscale};
+  }
+
+  if (type != "llama3") {
+    mx::eval(freqs);
+    return {freqs, 1.0f};
   }
 
   const RopeScaling& rs = *cfg.rope_scaling;
@@ -80,10 +143,8 @@ mx::array compute_rope_freqs(const ModelConfig& cfg) {
 
   freqs = mx::where(is_medium, smooth_freqs, freqs);
   mx::eval(freqs);
-  return freqs;
+  return {freqs, 1.0f};
 }
-
-}  // namespace
 
 bool rope_array_offset_overload_available() {
   mx::array x = mx::zeros({1, 1, 1, 4}, mx::float16);
@@ -95,7 +156,7 @@ bool rope_array_offset_overload_available() {
 }
 
 DecoderModel::DecoderModel(ModelConfig config, Weights weights)
-    : cfg_(std::move(config)), w_(std::move(weights)), rope_freqs_(compute_rope_freqs(cfg_)) {
+    : cfg_(std::move(config)), w_(std::move(weights)), rope_(compute_rope_setup(cfg_)) {
   log::debug("DecoderModel: type={} layers={} hidden={} heads={}/{} head_dim={} vocab={} "
              "quantized={}",
              cfg_.model_type, cfg_.n_layers, cfg_.hidden, cfg_.n_heads, cfg_.n_kv_heads,
@@ -146,14 +207,24 @@ mx::array DecoderModel::rms_norm(const mx::array& x, const mx::array& weight) co
   return mx::fast::rms_norm(x, std::optional<mx::array>(weight), cfg_.rms_eps);
 }
 
+mx::array DecoderModel::mscale_input(const mx::array& x) const {
+  // YaRN multiplies Q/K by mscale *before* the rotation, mirroring mlx_lm's
+  // YarnRoPE (which scales the rope input). The rotation is linear, so this
+  // equals post-scaling, and it keeps q_rope0/k_rope0 fixture-exact. The
+  // scalar takes x's dtype so the result dtype is unchanged (weak-scalar
+  // semantics, like mlx_lm's python float).
+  if (rope_.mscale == 1.0f) return x;
+  return mx::multiply(x, mx::array(rope_.mscale, x.dtype()));
+}
+
 mx::array DecoderModel::apply_rope(const mx::array& x, int offset) const {
-  return mx::fast::rope(x, cfg_.head_dim, /*traditional=*/false, /*base=*/std::nullopt,
-                        /*scale=*/1.0f, offset, rope_freqs_);
+  return mx::fast::rope(mscale_input(x), cfg_.head_dim, /*traditional=*/false,
+                        /*base=*/std::nullopt, /*scale=*/1.0f, offset, rope_.freqs);
 }
 
 mx::array DecoderModel::apply_rope(const mx::array& x, const mx::array& offset) const {
-  return mx::fast::rope(x, cfg_.head_dim, /*traditional=*/false, /*base=*/std::nullopt,
-                        /*scale=*/1.0f, offset, rope_freqs_);
+  return mx::fast::rope(mscale_input(x), cfg_.head_dim, /*traditional=*/false,
+                        /*base=*/std::nullopt, /*scale=*/1.0f, offset, rope_.freqs);
 }
 
 mx::array DecoderModel::norm_qk_head(const mx::array& h, int /*layer*/, bool /*is_query*/) const {

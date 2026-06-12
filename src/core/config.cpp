@@ -47,19 +47,34 @@ std::vector<int> parse_eos_ids(const nlohmann::json& j) {
   return {it->get<int>()};
 }
 
-// Attempt to parse the optional "rope_scaling" sub-object, if present and is an object.
-// Returns std::nullopt if absent or of incorrect type.
-// Otherwise, fills out RopeScaling struct with available fields.
-std::optional<RopeScaling> parse_rope_scaling(const nlohmann::json& j) {
-  auto it = j.find("rope_scaling");
-  if (it == j.end() || !it->is_object()) return std::nullopt;
+// Parse a rope-scaling JSON object into a RopeScaling. mlx_lm reads the type from
+// "rope_type" or the legacy "type" key and treats a typeless object as "default";
+// mirror that so the two sides agree on what a config means.
+RopeScaling rope_scaling_from_json(const nlohmann::json& o) {
   RopeScaling rs;
-  rs.rope_type = it->value("rope_type", std::string{});
-  rs.factor = it->value("factor", 1.0f);
-  rs.high_freq_factor = it->value("high_freq_factor", 1.0f);
-  rs.low_freq_factor = it->value("low_freq_factor", 1.0f);
-  rs.original_max_position_embeddings = it->value("original_max_position_embeddings", 0);
+  rs.rope_type = o.value("rope_type", o.value("type", std::string{}));
+  if (rs.rope_type.empty()) rs.rope_type = "default";
+  rs.factor = o.value("factor", 1.0f);
+  rs.high_freq_factor = o.value("high_freq_factor", 1.0f);
+  rs.low_freq_factor = o.value("low_freq_factor", 1.0f);
+  rs.original_max_position_embeddings = o.value("original_max_position_embeddings", 0);
+  rs.beta_fast = o.value("beta_fast", 32.0f);
+  rs.beta_slow = o.value("beta_slow", 1.0f);
+  rs.mscale = o.value("mscale", 1.0f);
+  rs.mscale_all_dim = o.value("mscale_all_dim", 0.0f);
   return rs;
+}
+
+// Attempt to parse the optional rope-scaling sub-object. Lives under "rope_scaling"
+// for most models, "rope_parameters" for Qwen3.5 — read both (like parse_mrope) so
+// an unsupported type in either spelling is *seen* and rejected at validation, not
+// silently dropped. Returns std::nullopt if neither is present.
+std::optional<RopeScaling> parse_rope_scaling(const nlohmann::json& j) {
+  for (const char* key : {"rope_scaling", "rope_parameters"}) {
+    auto it = j.find(key);
+    if (it != j.end() && it->is_object()) return rope_scaling_from_json(*it);
+  }
+  return std::nullopt;
 }
 
 // RoPE base frequency. Most configs expose a top-level "rope_theta"; Qwen3.5 nests
@@ -226,6 +241,62 @@ ModelConfig ModelConfig::from_file(const std::string& path) {
     throw std::runtime_error("config.json: parse error in '" + path + "': " + e.what());
   }
   return from_json(j);
+}
+
+void validate_rope_scaling(const ModelConfig& cfg) {
+  if (!cfg.rope_scaling) return;
+  const RopeScaling& rs = *cfg.rope_scaling;
+  const std::string& t = rs.rope_type;
+  if (t.empty() || t == "default" || t == "llama3") return;
+
+  if (t == "yarn" || t == "linear") {
+    // Supported only on the shared full-rotary text path (DecoderModel's
+    // precomputed-freqs RoPE). The other position schemes have their own rope
+    // code that would silently ignore the scaling — reject instead.
+    if (cfg.full_attention_interval > 0 || cfg.partial_rotary_factor != 1.0f) {
+      throw std::runtime_error("rope_scaling '" + t +
+                               "' is not supported for hybrid / partial-rotary models");
+    }
+    if (cfg.has_vision_tower() || !cfg.mrope_section.empty()) {
+      throw std::runtime_error("rope_scaling '" + t +
+                               "' is not supported for M-RoPE vision models");
+    }
+    if (cfg.rope_freq_factors) {
+      throw std::runtime_error("rope_scaling '" + t +
+                               "' conflicts with checkpoint-baked rope frequency factors");
+    }
+    if (rs.factor <= 0.0f) {
+      throw std::runtime_error("rope_scaling '" + t + "' requires factor > 0");
+    }
+    if (t == "yarn" && rs.original_max_position_embeddings <= 0) {
+      throw std::runtime_error(
+          "rope_scaling 'yarn' requires original_max_position_embeddings > 0");
+    }
+    return;
+  }
+
+  throw std::runtime_error("unsupported rope_scaling rope_type '" + t +
+                           "' (supported: default, llama3, yarn, linear)");
+}
+
+void apply_rope_scaling_override(ModelConfig& cfg, const std::string& json) {
+  nlohmann::json o;
+  try {
+    o = nlohmann::json::parse(json);
+  } catch (const nlohmann::json::exception& e) {
+    throw std::runtime_error(std::string("invalid rope_scaling override JSON: ") + e.what());
+  }
+  if (!o.is_object()) {
+    throw std::runtime_error("rope_scaling override must be a JSON object, e.g. "
+                             "{\"rope_type\":\"yarn\",\"factor\":4.0}");
+  }
+  RopeScaling rs = rope_scaling_from_json(o);
+  // A yarn override without the original window means "scale the checkpoint's
+  // shipped context" — the natural reading for a stock (unscaled) model.
+  if (rs.rope_type == "yarn" && rs.original_max_position_embeddings <= 0) {
+    rs.original_max_position_embeddings = cfg.max_position_embeddings;
+  }
+  cfg.rope_scaling = rs;
 }
 
 }  // namespace mlxforge

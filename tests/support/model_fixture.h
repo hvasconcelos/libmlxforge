@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include <nlohmann/json.hpp>
+
 #include "core/config.h"
 #include "core/weights.h"
 #include "model/llama.h"
@@ -47,6 +49,28 @@ inline bool qwen3_model_available() {
 inline Qwen3Model& shared_qwen3_model() {
   static Qwen3Model model = [] {
     ModelConfig cfg = ModelConfig::from_file(qwen3_model_dir() + "/config.json");
+    Weights w = load_weights(qwen3_model_dir(), cfg);
+    return Qwen3Model(std::move(cfg), std::move(w));
+  }();
+  return model;
+}
+
+// The Qwen3 weights again, with the yarn rope_scaling recorded in the
+// fixtures_qwen3_yarn manifest injected through the engine's override path —
+// the C++ mirror of dump_ref.py's model_config injection (no checkpoint on the
+// Hub ships yarn, so both sides inject the identical object).
+inline std::string qwen3_yarn_rope_json() {
+  std::ifstream f(std::string(MLXFORGE_REF_FIXTURES_DIR_QWEN3_YARN) + "/manifest.json");
+  nlohmann::json m;
+  f >> m;
+  return m.at("model_config").at("rope_scaling").dump();
+}
+
+inline Qwen3Model& shared_qwen3_yarn_model() {
+  static Qwen3Model model = [] {
+    ModelConfig cfg = ModelConfig::from_file(qwen3_model_dir() + "/config.json");
+    apply_rope_scaling_override(cfg, qwen3_yarn_rope_json());
+    validate_rope_scaling(cfg);
     Weights w = load_weights(qwen3_model_dir(), cfg);
     return Qwen3Model(std::move(cfg), std::move(w));
   }();

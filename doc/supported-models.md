@@ -33,6 +33,18 @@ the **ChatML** chat template (with an `enable_thinking` toggle for Qwen3's
 reasoning mode), and single-digit number pre-tokenization in the byte-level BPE.
 Qwen3 has **no BOS token**.
 
+**RoPE scaling.** Safetensors checkpoints may ship a `rope_scaling` config:
+`llama3` (Llama-3.2's rescaling), **`yarn`** and **`linear`** (long context — e.g.
+Qwen3's documented yarn recipe takes its native 32k window to 131k) are
+implemented and golden-gated against mlx-lm (`reference/fixtures_qwen3_yarn/`);
+`default` means unscaled. Yarn/linear can also be *forced onto a stock
+checkpoint* via the engine-level override (`mlxforge_engine_opts2.rope_scaling`,
+the server/CLI `--rope-scaling` flag), e.g.
+`'{"rope_type":"yarn","factor":4.0}'`. Anything else — unknown types
+(`dynamic`, `longrope`), yarn/linear on hybrid (Qwen3.5) or vision (Qwen3-VL)
+models, or on GGUF checkpoints — **fails at load** with a clear error; there is
+never a silent fall-back to unscaled RoPE.
+
 **Qwen3 MoE** models (e.g. 30B-A3B, 235B-A22B) run end-to-end too. They share the
 dense Qwen3 attention (QK-Norm) and ChatML tokenizer; the only delta is the
 feed-forward block. On the MoE layers (selected by `config.json`'s `num_experts`,

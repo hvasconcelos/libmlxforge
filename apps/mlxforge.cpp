@@ -81,6 +81,8 @@ void print_help() {
       "      --prefill-chunk <N>  interleaved-prefill chunk size in tokens, 0 = monolithic\n"
       "                         (default 256: decode keeps streaming during prefills)\n"
       "      --skinny-mm <0|1>  multi-row GEMV decode kernels for small batches (default 1)\n"
+      "      --rope-scaling <J> RoPE-scaling JSON override (vLLM-style), e.g.\n"
+      "                         '{\"rope_type\":\"yarn\",\"factor\":4.0}' (default: checkpoint's)\n"
       "  -h, --help             show this help and exit\n"
       "\n"
       "The model may be given via -m or the config file's \"model\" key.\n"
@@ -88,7 +90,7 @@ void print_help() {
       "Env vars: MLXFORGE_HOST, MLXFORGE_PORT, MLXFORGE_MAX_CTX, MLXFORGE_MAX_WAITING, "
       "MLXFORGE_KV_BUDGET, MLXFORGE_KV_BITS, MLXFORGE_PREFIX_CACHE, MLXFORGE_KV_BLOCK, "
       "MLXFORGE_KV_POOL, MLXFORGE_KV_SPILL_DIR, MLXFORGE_KV_SPILL_BYTES, "
-      "MLXFORGE_PREFILL_CHUNK, MLXFORGE_SKINNY_MM.");
+      "MLXFORGE_PREFILL_CHUNK, MLXFORGE_SKINNY_MM, MLXFORGE_ROPE_SCALING.");
   std::fflush(stdout);
 }
 
@@ -148,6 +150,7 @@ int main(int argc, char** argv) {
     ec.kv_spill_bytes = sc.kv_spill_bytes;
     ec.prefill_chunk = sc.prefill_chunk;
     ec.skinny_mm = sc.skinny_mm;
+    ec.rope_scaling = sc.rope_scaling;
     engine = std::make_unique<mlxforge::Engine>(std::move(ec));
   } catch (const std::exception& e) {
     mlxforge::log::error("model error: {}", e.what());
