@@ -24,6 +24,12 @@
 //     - Embeds text and prints the (by default unit-normalized) vector. With no flags the model
 //       self-selects its convention (a Qwen3-Embedding checkpoint uses last-token pooling + a
 //       trailing EOS). The embedding smoke/golden-reference harness for the library.
+//   mlxforge-cli schematic <model> [--out file.html] [--open]
+//     - Writes a self-contained interactive HTML infographic of the model's architecture (block
+//       schematic with matrix dims, parameter distribution, per-layer tensor explorer), read from
+//       metadata only — safetensors headers or the GGUF tensor directory; no weights are loaded
+//       and no MLX arrays are created. Defaults to ./<model>-schematic.html; --open opens it in
+//       the default browser.
 //
 // <dir>/<model> is either a local model directory or a HuggingFace repo id (e.g. mlx-community/Llama-3.2-1B-Instruct-4bit),
 // which will be downloaded on first use.
@@ -32,6 +38,8 @@
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -43,6 +51,8 @@
 #include "core/logging.h"
 #include "core/model_source.h"
 #include "core/weights.h"
+#include "inspect/model_schema.h"
+#include "inspect/schematic_html.h"
 #include "model/model_factory.h"
 #include "model/qwen3_vl.h"
 #include "model/vision/vit.h"
@@ -445,6 +455,57 @@ int run_embed(const std::string& spec, const std::string& text,
   return 0;
 }
 
+// Architecture infographic: read tensor metadata only (safetensors headers /
+// the GGUF tensor directory — no weight load, no MLX arrays) and write a
+// self-contained interactive HTML schematic of the model.
+int run_schematic(const std::string& spec, std::string out_path, bool open_after) {
+  const std::string resolved = mlxforge::resolve_model_dir(spec);
+
+  // A repo-id spec reads better as the display name than the resolved snapshot
+  // dir's hash basename; the builders fall back to the basename when empty.
+  const std::string display = mlxforge::looks_like_repo_id(spec) ? spec : "";
+
+  mlxforge::inspect::ModelSchema schema;
+  if (mlxforge::is_gguf_path(resolved)) {
+    schema = mlxforge::inspect::build_schema_from_gguf(resolved, display);
+  } else {
+    const auto cfg = mlxforge::ModelConfig::from_file(resolved + "/config.json");
+    schema = mlxforge::inspect::build_schema_from_safetensors(resolved, cfg, display);
+  }
+
+  if (out_path.empty()) {
+    // <model>-schematic.html from the display name's last path component.
+    std::string base = schema.model_name;
+    if (const size_t slash = base.find_last_of('/'); slash != std::string::npos)
+      base = base.substr(slash + 1);
+    if (const size_t dot = base.rfind(".gguf"); dot != std::string::npos) base.resize(dot);
+    out_path = base + "-schematic.html";
+  }
+
+  const std::string html = mlxforge::inspect::render_schematic_html(schema.to_json());
+  std::ofstream out(out_path, std::ios::binary);
+  if (!out || !(out << html)) {
+    mlxforge::log::error("schematic: cannot write '{}'", out_path);
+    return 1;
+  }
+  out.close();
+
+  mlxforge::log::info("schematic: {} ({}) — {} tensors, {} params, {} layers", schema.model_name,
+                      schema.family, schema.tensors.size(), schema.total_params, schema.cfg.n_layers);
+  // The output path is the command's primary output (like dump-weights).
+  std::printf("%s\n", out_path.c_str());
+
+  if (open_after) {
+    // Single-quote the path for the shell, escaping any embedded quote.
+    std::string quoted = "'";
+    for (char c : out_path) quoted += (c == '\'') ? std::string("'\\''") : std::string(1, c);
+    quoted += "'";
+    if (std::system(("open " + quoted).c_str()) != 0)
+      mlxforge::log::warn("schematic: failed to open '{}'", out_path);
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -551,6 +612,25 @@ int main(int argc, char** argv) {
       }
     }
     return run_embed(argv[2], argv[3], opts);
+  }
+  if (cmd == "schematic") {
+    // Architecture infographic from tensor metadata (no weight load).
+    if (argc < 3) {
+      std::fprintf(stderr, "usage: mlxforge-cli schematic <model> [--out file.html] [--open]\n");
+      return 2;
+    }
+    std::string out_path;
+    bool open_after = false;
+    for (int i = 3; i < argc; ++i) {
+      const std::string a = argv[i];
+      if (a == "--out" && i + 1 < argc) out_path = argv[++i];
+      else if (a == "--open") open_after = true;
+      else {
+        std::fprintf(stderr, "schematic: unknown argument '%s'\n", a.c_str());
+        return 2;
+      }
+    }
+    return run_schematic(argv[2], out_path, open_after);
   }
 
   // No subcommand: run the smoke test by default

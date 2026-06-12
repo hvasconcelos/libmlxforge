@@ -662,6 +662,73 @@ GgufModel load_gguf_config_and_tokenizer(const std::string& gguf_path) {
   return g;
 }
 
+std::string ggml_type_name(uint32_t t) {
+  // llama.cpp's ggml_type enum (ids 4/5 were removed upstream and never ship).
+  static const std::unordered_map<uint32_t, const char*> kNames = {
+      {0, "F32"},     {1, "F16"},     {2, "Q4_0"},    {3, "Q4_1"},    {6, "Q5_0"},
+      {7, "Q5_1"},    {8, "Q8_0"},    {9, "Q8_1"},    {10, "Q2_K"},   {11, "Q3_K"},
+      {12, "Q4_K"},   {13, "Q5_K"},   {14, "Q6_K"},   {15, "Q8_K"},   {16, "IQ2_XXS"},
+      {17, "IQ2_XS"}, {18, "IQ3_XXS"}, {19, "IQ1_S"}, {20, "IQ4_NL"}, {21, "IQ3_S"},
+      {22, "IQ2_S"},  {23, "IQ4_XS"}, {24, "I8"},     {25, "I16"},    {26, "I32"},
+      {27, "I64"},    {28, "F64"},    {29, "IQ1_M"},  {30, "BF16"},
+  };
+  auto it = kNames.find(t);
+  return it != kNames.end() ? it->second : "type_" + std::to_string(t);
+}
+
+double ggml_bits_per_weight(uint32_t t) {
+  // bytes-per-block / weights-per-block, so the per-block scale/min overhead is
+  // included (Q4_0: 18 B / 32 w = 4.5 bpw; K-quants are 256-weight super-blocks).
+  static const std::unordered_map<uint32_t, double> kBpw = {
+      {0, 32.0},     {1, 16.0},     {2, 4.5},     {3, 5.0},     {6, 5.5},
+      {7, 6.0},      {8, 8.5},      {9, 9.0},     {10, 2.625},  {11, 3.4375},
+      {12, 4.5},     {13, 5.5},     {14, 6.5625}, {15, 9.125},  {16, 2.0625},
+      {17, 2.3125},  {18, 3.0625},  {19, 1.5625}, {20, 4.5},    {21, 3.4375},
+      {22, 2.5},     {23, 4.25},    {24, 8.0},    {25, 16.0},   {26, 32.0},
+      {27, 64.0},    {28, 64.0},    {29, 1.75},   {30, 16.0},
+  };
+  auto it = kBpw.find(t);
+  return it != kBpw.end() ? it->second : 0.0;
+}
+
+GgufInspection inspect_gguf(const std::string& gguf_path) {
+  const GgufMetadata meta = parse_gguf_metadata(gguf_path);
+  GgufInspection out;
+  out.head = model_head_from_metadata(meta);
+
+  const uint64_t alignment =
+      std::max<uint64_t>(1, static_cast<uint64_t>(gm_int_or(meta, "general.alignment", 32)));
+  const GgufDirectory dir = parse_gguf_directory(gguf_path, alignment);
+
+  std::ifstream f(gguf_path, std::ios::binary | std::ios::ate);
+  if (!f) throw std::runtime_error("gguf: cannot open '" + gguf_path + "'");
+  out.file_bytes = static_cast<uint64_t>(f.tellg());
+
+  // Per-tensor bytes come from the gaps between consecutive data offsets (the
+  // last tensor runs to end-of-file). Exact for every type, including ones this
+  // build cannot load — no bytes-per-type table involved. Offsets are
+  // alignment-padded, so each tensor absorbs its own trailing pad (< alignment).
+  std::vector<size_t> order(dir.tensors.size());
+  for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+  std::sort(order.begin(), order.end(),
+            [&](size_t a, size_t b) { return dir.tensors[a].offset < dir.tensors[b].offset; });
+
+  out.tensors.resize(dir.tensors.size());
+  for (size_t k = 0; k < order.size(); ++k) {
+    const GgufTensorInfo& t = dir.tensors[order[k]];
+    GgufTensorMeta& m = out.tensors[order[k]];
+    m.name = t.name;
+    m.canonical = remap_gguf_key(t.name).value_or("");
+    m.ggml_type = t.ggml_type;
+    for (auto it = t.dims.rbegin(); it != t.dims.rend(); ++it)
+      m.shape.push_back(static_cast<int64_t>(*it));
+    const uint64_t end = (k + 1 < order.size()) ? dir.tensors[order[k + 1]].offset
+                                                : out.file_bytes - dir.data_start;
+    m.bytes = end - t.offset;
+  }
+  return out;
+}
+
 GgufModel load_gguf_model(const std::string& gguf_path) {
   log::info("gguf: loading '{}'", gguf_path);
   const GgufMetadata meta = parse_gguf_metadata(gguf_path);

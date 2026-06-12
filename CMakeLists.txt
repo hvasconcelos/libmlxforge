@@ -85,6 +85,9 @@ add_library(mlxforge_core STATIC
   src/tokenizer/bpe.cpp
   src/tokenizer/spm.cpp
   src/tokenizer/tokenizer.cpp
+  src/inspect/safetensors_header.cpp
+  src/inspect/model_schema.cpp
+  src/inspect/schematic_html.cpp
 )
 target_include_directories(mlxforge_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 # stb_image is header-only and used only inside src/vision/image_decode.cpp, so it
