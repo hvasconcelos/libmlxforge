@@ -40,6 +40,8 @@ add_executable(mlxforge_tests
   runtime/bucketing_test.cpp
   scheduler/validation_test.cpp
   model/qwen3_test.cpp
+  model/rope_scaling_test.cpp
+  model/qwen3_yarn_test.cpp
   model/qwen3_moe_test.cpp
   model/qwen3_5_test.cpp
   model/vit_test.cpp
@@ -159,6 +161,7 @@ target_compile_definitions(mlxforge_tests PRIVATE
   MLXFORGE_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
   MLXFORGE_REF_FIXTURES_DIR="${CMAKE_SOURCE_DIR}/reference/fixtures"
   MLXFORGE_REF_FIXTURES_DIR_QWEN3="${CMAKE_SOURCE_DIR}/reference/fixtures_qwen3"
+  MLXFORGE_REF_FIXTURES_DIR_QWEN3_YARN="${CMAKE_SOURCE_DIR}/reference/fixtures_qwen3_yarn"
   MLXFORGE_REF_FIXTURES_DIR_QWEN3_MOE="${CMAKE_SOURCE_DIR}/reference/fixtures_qwen3_moe"
   MLXFORGE_REF_FIXTURES_DIR_QWEN3_5="${CMAKE_SOURCE_DIR}/reference/fixtures_qwen3_5"
   MLXFORGE_REF_FIXTURES_DIR_QWEN3_VL="${CMAKE_SOURCE_DIR}/reference/fixtures_qwen3_vl"

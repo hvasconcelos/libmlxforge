@@ -29,14 +29,31 @@ namespace mx = mlx::core;
 // true if it ran the overload successfully.
 bool rope_array_offset_overload_available();
 
+// Precomputed RoPE state: the per-dimension frequency schedule (head_dim/2
+// float32 values, fed to fast::rope via `freqs` with base disabled) plus the
+// YaRN attention scale (1.0 for every other scheme).
+struct RopeSetup {
+  mx::array freqs;
+  float mscale = 1.0f;
+};
+
+// Compute the RoPE frequency schedule + mscale for a config: GGUF baked factors,
+// llama3 rescaling, yarn, linear, or the plain base**(2i/d) schedule. Validates
+// cfg.rope_scaling and throws on unsupported types (see validate_rope_scaling).
+// Exposed for the fixture-gated unit tests.
+RopeSetup compute_rope_setup(const ModelConfig& cfg);
+
 class DecoderModel {
  public:
   virtual ~DecoderModel() = default;
 
   const ModelConfig& config() const { return cfg_; }
   const Weights& weights() const { return w_; }
-  // Precomputed RoPE frequencies (llama3 rescaling), head_dim/2 float32 values.
-  const mx::array& rope_freqs() const { return rope_freqs_; }
+  // Precomputed RoPE frequencies (llama3/yarn/linear rescaling), head_dim/2
+  // float32 values.
+  const mx::array& rope_freqs() const { return rope_.freqs; }
+  // YaRN attention scale, multiplied into Q/K before fast::rope (1.0 unless yarn).
+  float rope_mscale() const { return rope_.mscale; }
 
   // Embedding lookup: tokens (B, L) int32 -> (B, L, hidden) fp16.
   mx::array embed(const mx::array& tokens) const;
@@ -121,6 +138,10 @@ class DecoderModel {
   // to route per layer. Same residual-stream shape (B, L, hidden) as the input.
   virtual mx::array feed_forward(const mx::array& x, int layer) const;
 
+  // YaRN pre-scales the RoPE input by rope_.mscale (see apply_rope); a no-op
+  // returning x unchanged for every other scheme (mscale == 1).
+  mx::array mscale_input(const mx::array& x) const;
+
   // input RMSNorm -> Q/K/V projections -> reshape to heads (norm_qk_head on
   // Q/K), WITHOUT RoPE.
   QKV project_qkv(const mx::array& x, int layer) const;
@@ -137,7 +158,7 @@ class DecoderModel {
 
   ModelConfig cfg_;
   Weights w_;
-  mx::array rope_freqs_;
+  RopeSetup rope_;
   bool skinny_mm_ = false;  // see set_skinny_mm()
 };
 

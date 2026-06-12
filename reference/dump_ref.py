@@ -22,6 +22,7 @@ import json
 import os
 
 import mlx.core as mx
+import mlx.nn as nn
 import numpy as np
 from mlx_lm import load
 from mlx_lm.models.base import create_attention_mask, create_ssm_mask
@@ -48,6 +49,26 @@ MODELS = {
         # Qwen3 ChatML: no default system message.
         "chat_messages": [{"role": "user", "content": "What is the capital of France?"}],
         "thinking": True,
+    },
+    # YaRN long-context gate: the SAME Qwen3 weights with Qwen's documented yarn
+    # recipe injected via model_config (no checkpoint on the Hub ships yarn in
+    # config.json, so it is injected on both sides — the C++ test reads the exact
+    # object back from this manifest and applies it through the engine's override
+    # path). Gates the yarn freqs schedule, the mscale-on-input convention, and
+    # the scaled forward end to end against mlx_lm's YarnRoPE.
+    "qwen3_yarn": {
+        "repo": "mlx-community/Qwen3-0.6B-bf16",
+        "fixtures": "fixtures_qwen3_yarn",
+        "compute_dtype": mx.float16,
+        "chat_messages": [{"role": "user", "content": "What is the capital of France?"}],
+        "thinking": True,
+        "model_config": {
+            "rope_scaling": {
+                "rope_type": "yarn",
+                "factor": 4.0,
+                "original_max_position_embeddings": 32768,
+            }
+        },
     },
     # Qwen3 MoE shares the dense Qwen3 attention (QK-Norm) and ChatML tokenizer;
     # only the feed-forward block differs (sparse expert routing). The smallest
@@ -536,7 +557,10 @@ def main():
 
     os.makedirs(FIXTURES_DIR, exist_ok=True)
     print(f"loading {MODEL_REPO} ...")
-    model, tok = load(MODEL_REPO)
+    # model_config (e.g. an injected yarn rope_scaling) updates config.json before
+    # the model is built; the manifest records it so the C++ test injects the
+    # exact same object through the engine's override path.
+    model, tok = load(MODEL_REPO, model_config=spec.get("model_config"))
     if COMPUTE_DTYPE is not None:
         model.set_dtype(COMPUTE_DTYPE)
     mx.eval(model.parameters())
@@ -549,6 +573,8 @@ def main():
         "greedy_max_new": GREEDY_MAX_NEW,
         "arrays": {},
     }
+    if spec.get("model_config"):
+        manifest["model_config"] = spec["model_config"]
 
     def save(name, arr):
         """Eval an MLX array (or accept a numpy array) and write it as .npy."""
@@ -627,14 +653,29 @@ def main():
         k = attn.k_norm(k)
     q = q.transpose(0, 2, 1, 3)  # (1, n_heads, T, head_dim)
     k = k.transpose(0, 2, 1, 3)  # (1, n_kv_heads, T, head_dim)
-    # The precomputed `_freqs` is specific to the llama3-rescaled RoPE; plain-RoPE
-    # models (Qwen3) lack it. The front-half intermediates are dumped for both.
+    # The precomputed `_freqs` is specific to rescaled RoPE (llama3, yarn);
+    # plain-RoPE models (Qwen3) lack it. The front-half intermediates are dumped
+    # for both. YarnRoPE additionally carries the attention mscale it folds into
+    # the rope input — dumped so the C++ side gates the same convention.
     if hasattr(attn.rope, "_freqs"):
-        save("rope_freqs", attn.rope._freqs)  # (head_dim/2,) llama3-rescaled freqs
+        save("rope_freqs", attn.rope._freqs)  # (head_dim/2,) rescaled freqs
+    if hasattr(attn.rope, "mscale"):
+        save("rope_mscale", np.float32(attn.rope.mscale))
     save("q_pre0", q)  # pre-RoPE queries (post q_norm for Qwen3)
     save("q_rope0", attn.rope(q))
     save("k_rope0", attn.rope(k))
     save("v0", v)
+
+    # Linear-scaling oracle, piggybacked on the yarn dump (no separate fixture
+    # dir): mlx_lm's rope_type "linear" is nn.RoPE(scale=1/factor); apply it to
+    # the same committed q_pre0/k_pre0 tensors so the C++ linear freqs path has a
+    # true fixture-to-fixture gate.
+    if spec.get("model_config", {}).get("rope_scaling", {}).get("rope_type") == "yarn":
+        factor = spec["model_config"]["rope_scaling"]["factor"]
+        lin = nn.RoPE(q.shape[-1], traditional=False, base=model.args.rope_theta,
+                      scale=1.0 / factor)
+        save("q_rope0_linear", lin(q))
+        save("k_rope0_linear", lin(k))
 
     # Block-0 output: exactly what LlamaModel.__call__ computes for layer 0
     # (gates the single decoder block).

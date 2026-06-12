@@ -113,7 +113,7 @@ int validate_prefill_chunk(const EngineConfig& ec) {
 // For GGUF, this loads only the config/tokenizer fields from the GGUF header (not tensors).
 // For non-GGUF (MLX-style), loads config.json and tokenizer.json from disk.
 // This must be called on the main thread (MLX arrays are thread-locked to creating thread).
-Engine::Loaded Engine::load_head(const std::string& spec) {
+Engine::Loaded Engine::load_head(const std::string& spec, const std::string& rope_scaling) {
   Loaded out;
 
   // Resolve the physical directory for this model spec (could be local path or HF repo).
@@ -144,6 +144,16 @@ Engine::Loaded Engine::load_head(const std::string& spec) {
     );
   }
 
+  // RoPE-scaling override + validation, on the caller thread. The worker thread
+  // re-applies the same override when it rebuilds the config (make_factory) but
+  // cannot throw cleanly, so every rejection must happen here.
+  if (!rope_scaling.empty()) {
+    if (out.is_gguf)
+      throw std::runtime_error("rope_scaling override is not supported for GGUF models");
+    apply_rope_scaling_override(out.config, rope_scaling);
+  }
+  validate_rope_scaling(out.config);
+
   // Sniff embedding defaults from the on-disk sentence-transformers sidecar (no
   // such files inside a GGUF, so this is a no-op there).
   detect_embedding_defaults(out.dir, out.embed_pooling_default, out.embed_add_eos_default);
@@ -155,8 +165,10 @@ Engine::Loaded Engine::load_head(const std::string& spec) {
 // MLX arrays must be created on the thread that will use them (the worker's).
 //   - For GGUF: loads the weights from the GGUF file, then builds model.
 //   - For non-GGUF: loads model config and weights, then builds model.
-Worker::ModelFactory Engine::make_factory(std::string dir, bool is_gguf) {
-  return [dir = std::move(dir), is_gguf]() -> std::unique_ptr<DecoderModel> {
+Worker::ModelFactory Engine::make_factory(std::string dir, bool is_gguf,
+                                          std::string rope_scaling) {
+  return [dir = std::move(dir), is_gguf,
+          rope_scaling = std::move(rope_scaling)]() -> std::unique_ptr<DecoderModel> {
     if (is_gguf) {
       // Parse config and load all weights from GGUF in one shot.
       GgufModel g = load_gguf_model(dir);
@@ -164,6 +176,11 @@ Worker::ModelFactory Engine::make_factory(std::string dir, bool is_gguf) {
     }
     // Load config and weight tensors for legacy (non-GGUF) model format.
     ModelConfig wcfg = ModelConfig::from_file(dir + "/config.json");
+    // Re-apply the rope-scaling override on the worker's copy of the config.
+    // load_head already applied + validated the identical config/override on the
+    // caller thread, so this cannot newly throw (a throw here would terminate —
+    // the worker run loop has no catch around the factory).
+    if (!rope_scaling.empty()) apply_rope_scaling_override(wcfg, rope_scaling);
     auto weights = load_weights(dir, wcfg);
     return create_model(std::move(wcfg), std::move(weights));
   };
@@ -171,7 +188,7 @@ Worker::ModelFactory Engine::make_factory(std::string dir, bool is_gguf) {
 
 // Engine constructor: minimal form — loads config/tokenizer head from the given model spec.
 Engine::Engine(EngineConfig cfg)
-    : Engine(cfg, load_head(cfg.model_spec)) {}
+    : Engine(cfg, load_head(cfg.model_spec, cfg.rope_scaling)) {}
 
 // Engine constructor: explicit Loaded head (allows passing in preloaded config/tokenizer).
 // Sets up model name, config, tokenizer, and spawns worker thread for weights/model load.
@@ -184,7 +201,8 @@ Engine::Engine(EngineConfig cfg, Loaded loaded)
       // Pass the tokenizer so the worker can build per-token byte strings for
       // constrained decoding. tok_ is initialized above and outlives worker_.
       // cfg_ is initialized above, so the KV-quant validation sees the model.
-      worker_(make_factory(std::move(loaded.dir), loaded.is_gguf), &scheduler_, &tok_,
+      worker_(make_factory(std::move(loaded.dir), loaded.is_gguf, cfg.rope_scaling), &scheduler_,
+              &tok_,
               validate_kv_quant(cfg, cfg_), validate_prefix_cache(cfg, cfg_, model_name_),
               validate_prefill_chunk(cfg), cfg.skinny_mm) {
   // Configure the max waiting requests for the batch scheduler.

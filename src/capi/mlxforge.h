@@ -50,8 +50,11 @@ extern "C" {
  *   v8: mlxforge_engine_opts2.prefill_chunk (chunked-prefill interleaving,
  *       default-on) — appended, struct_size-gated; no new symbols.
  *   v9: mlxforge_engine_opts2.skinny_mm (multi-row GEMV decode kernels,
- *       default-on) — appended, struct_size-gated; no new symbols. */
-#define MLXFORGE_ABI_VERSION 9
+ *       default-on) — appended, struct_size-gated; no new symbols.
+ *   v10: mlxforge_engine_opts2.rope_scaling (RoPE-scaling JSON override,
+ *       yarn/linear long-context support) — appended, struct_size-gated; no
+ *       new symbols. */
+#define MLXFORGE_ABI_VERSION 10
 
 typedef struct mlxforge_engine mlxforge_engine;
 typedef struct mlxforge_request mlxforge_request;
@@ -152,7 +155,17 @@ mlxforge_engine* mlxforge_engine_create(const char* model_spec,
  * MLX's tiled GEMM, which runs at a fraction of GEMV bandwidth there
  * (ml-explore/mlx#3661) — roughly 2x per-row decode throughput at small
  * batch sizes. On by default. 0 keeps the default; < 0 disables (stock
- * matmul); > 0 enables. */
+ * matmul); > 0 enables.
+ *
+ * rope_scaling (v10+) overrides the checkpoint's RoPE-scaling config with a
+ * JSON object (vLLM --rope-scaling shape), enabling long-context yarn/linear
+ * scaling on a stock checkpoint, e.g.
+ *   {"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768}
+ * (a yarn override may omit original_max_position_embeddings to scale the
+ * checkpoint's shipped context). NULL/empty = use the checkpoint's config.
+ * Unknown/unsupported rope_type values, hybrid (Qwen3.5) / vision-language
+ * models and GGUF checkpoints FAIL engine creation with a clear *err — there
+ * is never a silent fall-back to unscaled RoPE. */
 typedef struct {
   size_t struct_size;   /* caller sets sizeof(mlxforge_engine_opts2) */
   int max_waiting;      /* max queued requests; <= 0 => default (256) */
@@ -170,6 +183,9 @@ typedef struct {
   /* ---- v9 ---- */
   int skinny_mm;             /* multi-row GEMV decode kernels; 0 => default (on);
                                 < 0 => off (stock matmul); > 0 => on */
+  /* ---- v10 ---- */
+  const char* rope_scaling;  /* RoPE-scaling JSON override; NULL/empty => use the
+                                checkpoint's config */
 } mlxforge_engine_opts2;
 
 /* Create an engine with extended options (v6+). Identical contract to

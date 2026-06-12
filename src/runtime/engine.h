@@ -57,6 +57,13 @@ struct EngineConfig {
   // On by default; logits may differ from the stock kernel at fp16-noise scale
   // (fp32 accumulation in a different order), token-equality gated in tests.
   bool skinny_mm = true;
+  // RoPE-scaling override (vLLM --rope-scaling style): a JSON object replacing
+  // the checkpoint's rope_scaling config, e.g.
+  //   {"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768}
+  // Empty = use the checkpoint's config as-is. Like kv_bits, unsupported setups
+  // (unknown rope_type, hybrid/vision models, GGUF) FAIL engine creation —
+  // never a silent fall-back to unscaled RoPE.
+  std::string rope_scaling;
 };
 
 // Per-call embedding options. The two int fields are tri-state: -1 means "use
@@ -123,10 +130,13 @@ class Engine {
     bool embed_add_eos_default = false;
   };
 
-  // Resolve model spec path, parse config/tokenizer, etc.
-  static Loaded load_head(const std::string& spec);
+  // Resolve model spec path, parse config/tokenizer, etc. Applies the optional
+  // rope-scaling override and validates it — this is the caller-thread rejection
+  // point for unsupported rope configs (the worker thread cannot throw cleanly).
+  static Loaded load_head(const std::string& spec, const std::string& rope_scaling);
   // Factory builder: creates a Worker::ModelFactory, handling weight loading with proper backend
-  static Worker::ModelFactory make_factory(std::string dir, bool is_gguf);
+  static Worker::ModelFactory make_factory(std::string dir, bool is_gguf,
+                                           std::string rope_scaling);
 
   // Private delegating ctor, used internally after head-loading step is complete.
   Engine(EngineConfig cfg, Loaded loaded);

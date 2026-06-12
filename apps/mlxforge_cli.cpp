@@ -7,11 +7,14 @@
 //     - Loads a model's weights from the supplied directory, prints key/shape/dtype for each tensor,
 //       asserts that all tensors are fp16, and reports the peak resident memory used.
 //   mlxforge-cli generate <model> <prompt> [max_tokens] [--logprobs [N]] [--kv-bits N]
+//                [--rope-scaling <json>]
 //     - Runs greedy single-stream generation: pre-fills the prompt (as raw text using the chat template
 //       or as a pre-tokenized .npy of ids), then streams the detokenized text to stdout until EOS or
 //       max_tokens. With --logprobs [N], each emitted token's log-prob (and its N most-likely
 //       alternatives) is printed to stderr after generation; stdout stays the generated text.
 //       --kv-bits 8|4 stores the KV cache quantized (the manual harness for the quantized path).
+//       --rope-scaling overrides the checkpoint's RoPE-scaling config with a JSON object
+//       (vLLM-style), e.g. '{"rope_type":"yarn","factor":4.0}' for long context.
 //   mlxforge-cli bench <model> [max_tokens] [runs]
 //     - Repeatable throughput benchmark over a fixed prompt: one discarded warmup run, then `runs`
 //       timed runs (defaults: max_tokens=128, runs=3) reporting time-to-first-token and decode tok/s.
@@ -77,11 +80,15 @@ struct LoadedModel {
 };
 
 // Resolve a model spec and load it for single-stream inference, dispatching on
-// whether it resolves to a GGUF file or a safetensors directory.
-LoadedModel load_for_inference(const std::string& spec) {
+// whether it resolves to a GGUF file or a safetensors directory. `rope_scaling`
+// optionally overrides the checkpoint's RoPE-scaling config (the CLI bypasses
+// Engine, so the override is applied here; model construction validates it).
+LoadedModel load_for_inference(const std::string& spec, const std::string& rope_scaling = "") {
   const std::string resolved = mlxforge::resolve_model_dir(spec);
   LoadedModel lm;
   if (mlxforge::is_gguf_path(resolved)) {
+    if (!rope_scaling.empty())
+      throw std::runtime_error("rope_scaling override is not supported for GGUF models");
     mlxforge::GgufModel g = mlxforge::load_gguf_model(resolved);
     lm.cfg = g.config;
     lm.tok = mlxforge::Tokenizer::from_gguf(g.tokens, g.merges, g.token_types, g.pre, g.bos_id,
@@ -89,6 +96,8 @@ LoadedModel load_for_inference(const std::string& spec) {
     lm.model = mlxforge::create_model(std::move(g.config), std::move(g.weights));
   } else {
     lm.cfg = mlxforge::ModelConfig::from_file(resolved + "/config.json");
+    if (!rope_scaling.empty()) mlxforge::apply_rope_scaling_override(lm.cfg, rope_scaling);
+    mlxforge::validate_rope_scaling(lm.cfg);
     lm.model = mlxforge::create_model(lm.cfg, mlxforge::load_weights(resolved, lm.cfg));
     lm.tok = mlxforge::Tokenizer::from_file(resolved + "/tokenizer.json", lm.cfg.bos_token_id,
                                             mlxforge::chat_format_from_model_type(lm.cfg.model_type));
@@ -188,9 +197,10 @@ std::string show_token(const std::string& s) {
 // `top_logprobs` mirrors the engine knob: -1 = off; 0 = each token's own log-prob;
 // N > 0 = also its N most-likely alternatives (printed to stderr after generation).
 int run_generate(const std::string& spec, const std::string& prompt_arg, int max_tokens,
-                 int top_logprobs = -1, int kv_bits = 0) {
+                 int top_logprobs = -1, int kv_bits = 0,
+                 const std::string& rope_scaling = "") {
   // Resolve and load the model (GGUF file or safetensors dir; downloads if needed)
-  LoadedModel lm = load_for_inference(spec);
+  LoadedModel lm = load_for_inference(spec, rope_scaling);
   mlxforge::DecoderModel& model = *lm.model;
   mlxforge::Tokenizer& tok = lm.tok;
   const mlxforge::ModelConfig& cfg = lm.cfg;
@@ -466,15 +476,17 @@ int main(int argc, char** argv) {
     if (argc < 4) {
       std::fprintf(stderr,
                    "usage: mlxforge-cli generate <model_dir> <prompt_ids.npy> [max_tokens] "
-                   "[--logprobs [N]] [--kv-bits N]\n");
+                   "[--logprobs [N]] [--kv-bits N] [--rope-scaling <json>]\n");
       return 2;
     }
     // Positional [max_tokens] (default 64), an optional --logprobs [N] flag (N
-    // alternatives, default 0 = the chosen token's own log-prob only), and an
-    // optional --kv-bits N (0 = fp16 cache, 8 or 4 = quantized).
+    // alternatives, default 0 = the chosen token's own log-prob only), an
+    // optional --kv-bits N (0 = fp16 cache, 8 or 4 = quantized), and an optional
+    // --rope-scaling JSON override (vLLM-style, e.g. yarn for long context).
     int max_tokens = 64;
     int top_logprobs = -1;
     int kv_bits = 0;
+    std::string rope_scaling;
     for (int i = 4; i < argc; ++i) {
       const std::string a = argv[i];
       if (a == "--logprobs") {
@@ -492,11 +504,17 @@ int main(int argc, char** argv) {
           std::fprintf(stderr, "error: --kv-bits must be 0, 4, or 8\n");
           return 2;
         }
+      } else if (a == "--rope-scaling") {
+        if (i + 1 >= argc) {
+          std::fprintf(stderr, "error: --rope-scaling needs a JSON value\n");
+          return 2;
+        }
+        rope_scaling = argv[++i];
       } else {
         max_tokens = std::stoi(a);
       }
     }
-    return run_generate(argv[2], argv[3], max_tokens, top_logprobs, kv_bits);
+    return run_generate(argv[2], argv[3], max_tokens, top_logprobs, kv_bits, rope_scaling);
   }
   if (cmd == "image") {
     // Vision-language generation: describe / answer about an image.

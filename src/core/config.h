@@ -24,11 +24,16 @@ struct QuantParams {
 /// Used by the RoPE stage to adjust rotational frequencies and handle
 /// position extrapolation for extended context.
 struct RopeScaling {
-  std::string rope_type;             ///< Type of RoPE scaling ("llama3", etc.)
+  std::string rope_type;             ///< Type of RoPE scaling ("llama3", "yarn", "linear", ...).
   float factor = 1.0f;               ///< Primary scaling factor.
-  float high_freq_factor = 1.0f;     ///< Scaling factor for high frequency components.
-  float low_freq_factor = 1.0f;      ///< Scaling factor for low frequency components.
+  float high_freq_factor = 1.0f;     ///< llama3: scaling factor for high frequency components.
+  float low_freq_factor = 1.0f;      ///< llama3: scaling factor for low frequency components.
   int original_max_position_embeddings = 0; ///< Original context length before scaling.
+  // YaRN parameters (defaults mirror mlx_lm's YarnRoPE).
+  float beta_fast = 32.0f;           ///< yarn: rotations bound for the interpolation ramp start.
+  float beta_slow = 1.0f;            ///< yarn: rotations bound for the interpolation ramp end.
+  float mscale = 1.0f;               ///< yarn: attention-scale numerator coefficient.
+  float mscale_all_dim = 0.0f;       ///< yarn: attention-scale denominator coefficient.
 };
 
 /// @brief Vision-tower (ViT) hyperparameters for a multimodal checkpoint.
@@ -197,5 +202,21 @@ struct ModelConfig {
   /// @return ModelConfig instance.
   static ModelConfig from_file(const std::string& path);
 };
+
+/// @brief Validate cfg.rope_scaling against the supported set. No scaling, "default"
+///        and "llama3" always pass; "yarn"/"linear" pass only on the shared full-rotary
+///        text path (rejected for hybrid/Qwen3.5, M-RoPE/vision and GGUF freq-factor
+///        models); anything else throws. Replaces the old silent fall-through to
+///        unscaled RoPE — an unsupported type must fail loading, never degrade.
+/// @throws std::runtime_error naming the unsupported type or conflicting feature.
+void validate_rope_scaling(const ModelConfig& cfg);
+
+/// @brief Replace cfg.rope_scaling with the parsed `json` object (vLLM --rope-scaling
+///        semantics: full replacement, not a merge). For yarn overrides that omit
+///        original_max_position_embeddings, defaults it to the checkpoint's
+///        max_position_embeddings. Does not validate the type — call
+///        validate_rope_scaling afterwards.
+/// @throws std::runtime_error on malformed JSON or a non-object value.
+void apply_rope_scaling_override(ModelConfig& cfg, const std::string& json);
 
 }  // namespace mlxforge

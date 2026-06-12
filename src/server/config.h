@@ -51,6 +51,10 @@ struct ServerConfig {
   // Multi-row GEMV decode kernels for small batched-decode matmuls (default on).
   bool skinny_mm = true;
 
+  // RoPE-scaling JSON override (vLLM --rope-scaling style), passed through to
+  // the engine. Empty = use the checkpoint's rope_scaling config.
+  std::string rope_scaling;
+
   // Parses command line arguments (the model via -m/--model, plus optional flags as --flag value or --flag=value),
   // layering configuration sources by precedence (lowest to highest):
   //   struct defaults < config file (-c/--config) < environment variables < CLI flags.
@@ -58,7 +62,7 @@ struct ServerConfig {
   // Env vars: MLXFORGE_HOST, MLXFORGE_PORT, MLXFORGE_MAX_CTX, MLXFORGE_MAX_WAITING,
   // MLXFORGE_KV_BUDGET, MLXFORGE_KV_BITS, MLXFORGE_PREFIX_CACHE, MLXFORGE_KV_BLOCK,
   // MLXFORGE_KV_POOL, MLXFORGE_KV_SPILL_DIR, MLXFORGE_KV_SPILL_BYTES,
-  // MLXFORGE_PREFILL_CHUNK, MLXFORGE_SKINNY_MM.
+  // MLXFORGE_PREFILL_CHUNK, MLXFORGE_SKINNY_MM, MLXFORGE_ROPE_SCALING.
   // Throws std::runtime_error if an unknown or malformed flag is encountered.
   static ServerConfig parse(const std::vector<std::string>& args);
 
@@ -66,7 +70,7 @@ struct ServerConfig {
   // with struct defaults filling any keys the file omits. Recognized keys
   // (snake_case): "model", "host", "port", "max_ctx", "max_waiting", "kv_budget",
   // "kv_bits", "prefix_cache", "kv_block", "kv_pool", "kv_spill_dir",
-  // "kv_spill_bytes", "prefill_chunk", "skinny_mm".
+  // "kv_spill_bytes", "prefill_chunk", "skinny_mm", "rope_scaling".
   // Validates before applying: rejects unknown keys, wrong types, and out-of-range
   // values. Throws std::runtime_error (with the file path / offending key) on any
   // failure to open, parse, or validate.

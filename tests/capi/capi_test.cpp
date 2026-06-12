@@ -425,3 +425,45 @@ TEST_CASE("C ABI v9 skinny_mm: kernel-on and stock-matmul engines agree") {
   CHECK(run_with(1) == stock);  // explicit on
   CHECK(run_with(0) == stock);  // the default (on)
 }
+
+TEST_CASE("C ABI v10 rope_scaling: yarn override loads; unknown types fail creation") {
+  if (!model_available()) {
+    MESSAGE("MLXFORGE_MODEL_DIR not present; skipping");
+    return;
+  }
+  // An unsupported rope_type must fail creation with a clear *err on the caller
+  // thread — never a silent fall-back to unscaled RoPE.
+  char* err = nullptr;
+  mlxforge_engine_opts2 opts = {};
+  opts.struct_size = sizeof(opts);
+  opts.rope_scaling = "{\"rope_type\":\"dynamic\",\"factor\":2.0}";
+  mlxforge_engine* eng = mlxforge_engine_create2(model_dir().c_str(), &opts, &err);
+  CHECK(eng == nullptr);
+  REQUIRE(err != nullptr);
+  CHECK(std::string(err).find("unsupported rope_scaling") != std::string::npos);
+  mlxforge_string_free(err);
+
+  // Malformed JSON is rejected the same way.
+  err = nullptr;
+  opts.rope_scaling = "{not json";
+  eng = mlxforge_engine_create2(model_dir().c_str(), &opts, &err);
+  CHECK(eng == nullptr);
+  REQUIRE(err != nullptr);
+  CHECK(std::string(err).find("rope_scaling") != std::string::npos);
+  mlxforge_string_free(err);
+
+  // A valid yarn override creates an engine that decodes coherently. Llama-3.2
+  // ships llama3 scaling, so the override also exercises full replacement.
+  err = nullptr;
+  opts.rope_scaling =
+      "{\"rope_type\":\"yarn\",\"factor\":4.0,\"original_max_position_embeddings\":8192}";
+  eng = mlxforge_engine_create2(model_dir().c_str(), &opts, &err);
+  REQUIRE_MESSAGE(eng != nullptr, (err ? err : "engine_create2 failed"));
+  mlxforge_sampling s = {};
+  s.max_tokens = 4;
+  mlxforge_request* r = mlxforge_submit_text(eng, "Hello", &s, &err);
+  REQUIRE_MESSAGE(r != nullptr, (err ? err : "submit failed"));
+  CHECK(drain(r).size() > 0);
+  mlxforge_request_free(r);
+  mlxforge_engine_free(eng);
+}
