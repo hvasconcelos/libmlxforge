@@ -106,7 +106,7 @@ struct mlxforge_request {
 
 extern "C" {
 
-const char* mlxforge_version(void) { return "0.1.0"; }
+const char* mlxforge_version(void) { return "0.2.0"; }
 
 int mlxforge_abi_version(void) { return MLXFORGE_ABI_VERSION; }
 

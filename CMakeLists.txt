@@ -108,7 +108,7 @@ if(MLXFORGE_BUILD_SHARED)
   target_link_libraries(mlxforge_shared PRIVATE mlxforge_core)
   set_target_properties(mlxforge_shared PROPERTIES
     OUTPUT_NAME mlxforge
-    VERSION 0.1.0
+    VERSION 0.2.0
     SOVERSION 0)
   target_include_directories(mlxforge_shared PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/capi>

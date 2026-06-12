@@ -55,6 +55,14 @@ the C-ABI / Node quickstart.
   **KV-cache quantization** (`--kv-bits 8|4`, default fp16): mlx-lm-matching quantized
   storage + attention for ~1.9×/~3.6× less cache memory — including the active
   continuous-decode batch, which no other MLX server quantizes.
+- **Prefix cache + paged KV storage** — immutable prompt-K/V blocks (keyed by a salted
+  chain hash) are pooled in memory and seed a batch-1 cache on a hit (warm == cold,
+  token-exact), with an optional **SSD spill tier** that persists blocks across runs.
+- **Chunked-prefill interleaving** (`prefill_chunk`, default-on) — long prompts prefill
+  in chunks interleaved with the decode batch: **+25–35% batched throughput** and up to
+  **~60% lower TTFT** under load.
+- **Multi-row decode kernels** (`skinny_mm`, default-on) — a multi-row GEMV path plus a
+  `simdgroup_matrix` MMA kernel for the big-weight decode matmuls (batch M ≈ 5–32).
 - **Sampling as graph ops** — greedy, temperature, top-k, top-p (no host readback).
 - **Embeddings** — `engine.embed` runs the decoder to its final hidden states, pools
   (mean or last-token) and L2-normalizes. **Qwen3-Embedding** is first-class. Exposed
@@ -62,7 +70,9 @@ the C-ABI / Node quickstart.
 - **C++ tokenizer** — from-scratch byte-level BPE and SentencePiece-BPE over HF
   `tokenizer.json` (no Rust), with chat templates and UTF-8-safe streaming detokenization.
 - **OpenAI server harness** — drives the engine over HTTP (`/v1/chat/completions`,
-  `/v1/completions`, `/v1/embeddings`, `/v1/models`, `/health`), streaming + tool calling.
+  `/v1/completions`, `/v1/embeddings`, `/v1/models`, `/health`) plus an
+  Anthropic-compatible `/v1/messages`, with streaming, tool calling, per-token
+  **logprobs** (`logprobs`/`top_logprobs`), and **image** content parts (Qwen3-VL).
   Built only when `MLXFORGE_BUILD_SERVER=ON`; the released library ships without it.
 - **Optional 4-bit quantization** — `quantized_matmul` (group_size 64), ~0.65 GiB
   resident vs ~2.3 GiB fp16.
